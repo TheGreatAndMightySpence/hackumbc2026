@@ -1,0 +1,49 @@
+.ai-chart {
+  margin: 12px 0 0;
+  padding: 16px 12px 12px;
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.ai-chart figcaption {
+  margin: 0 8px 8px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.ai-chart__data {
+  margin: 8px 8px 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.ai-chart__data summary {
+  cursor: pointer;
+}
+
+.ai-chart__table {
+  max-height: 240px;
+  margin-top: 8px;
+  overflow: auto;
+}
+
+.ai-chart__table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ai-chart__table th,
+.ai-chart__table td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-chart__table th {
+  position: sticky;
+  top: 0;
+  color: var(--text-h);
+  background: var(--bg);
+}

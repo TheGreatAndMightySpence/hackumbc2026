@@ -1,4 +1,6 @@
 import { useState } from "react";
+import type { AiChartSpec, AskResponse } from "../types";
+import AiChart from "./AiChart";
 import MarkdownText from "./MarkdownText";
 import "./AiQuery.css";
 
@@ -6,12 +8,14 @@ export default function AiQuery() {
   const [question, setQuestion] = useState("");
   const [asked, setAsked] = useState<string | null>(null);
   const [answer, setAnswer] = useState<string | null>(null);
+  const [charts, setCharts] = useState<AiChartSpec[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function ask(q: string) {
     setAsked(q);
     setAnswer(null);
+    setCharts([]);
     setError(null);
     setLoading(true);
     try {
@@ -21,8 +25,9 @@ export default function AiQuery() {
         body: JSON.stringify({ question: q }),
       });
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      const data = (await res.json()) as { answer: string };
+      const data = (await res.json()) as AskResponse;
       setAnswer(data.answer);
+      setCharts(data.charts ?? []);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -33,7 +38,7 @@ export default function AiQuery() {
   return (
     <section className="ai-query">
       <h2>Ask a question</h2>
-      <p>Type a question about the program, and we'll try to answer it.</p>
+      <p>Type a question about the program, and we'll try to answer it. We can even provide graphs and visualizations.</p>
       <form
         className="ai-query__form"
         onSubmit={e => {
@@ -48,7 +53,7 @@ export default function AiQuery() {
           type="text"
           value={question}
           onChange={e => setQuestion(e.target.value)}
-          placeholder="e.g. What is the salary increase per year?"
+          placeholder="e.g. Can you show me a graph of earnings per gpa?"
           aria-label="Your question"
         />
         <button type="submit" disabled={!question.trim() || loading}>Ask</button>
@@ -57,6 +62,7 @@ export default function AiQuery() {
       {loading && <p className="ai-query__answer">Thinking…</p>}
       {error && <p className="ai-query__answer">Couldn't get an answer: {error}</p>}
       {answer && <MarkdownText className="ai-query__answer">{answer}</MarkdownText>}
+      {charts.map((chart, i) => <AiChart key={i} chart={chart} />)}
     </section>
   );
 }

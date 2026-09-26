@@ -1,5 +1,6 @@
 import { useApi } from "../api";
 import type { MajorKey, TopQuestion } from "../types";
+import AiChart from "./AiChart";
 import MarkdownText from "./MarkdownText";
 import "./QuickInformation.css";
 
@@ -33,6 +34,7 @@ export default function QuickInformation({ majors = [] }: Props) {
                 </span>
               </summary>
               <MarkdownText className="quick-info__answer">{item.answer}</MarkdownText>
+              {item.charts?.map((chart, i) => <AiChart key={i} chart={chart} />)}
             </details>
           ))}
         </div>

@@ -266,8 +266,10 @@ def ai_query(req: AIQuery):
 
 
 # Natural-language answers via Gemini
-#   POST /api/ai/ask {question} -> {answer}
+#   POST /api/ai/ask {question} -> {answer, charts}
 #   The key stays on the server; Gemini writes SQL, we run it read-only, Gemini explains the result.
+#   charts is a list of {type, title, x_key, x_label, y_keys, y_label, y_format, data, sql}
+#   where data is the query's rows, ready to pass straight to a Recharts chart's data prop.
 
 gemini = genai.Client(api_key=api_key)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")  # free tier on gemini-3.8-flash is only 5 req/min
@@ -279,6 +281,48 @@ def run_sql(sql: str) -> dict:
         return ai_query(AIQuery(sql=sql))
     except HTTPException as e:
         return {"error": e.detail}
+
+CHART_TYPES = {"bar", "line", "scatter"}
+CHART_Y_FORMATS = {"dollars", "number", "percent"}
+CHART_MAX_SERIES = 4
+CHART_MAX_POINTS = 500
+
+def chart_tool(charts: list):
+    """A make_chart tool for one request; every chart it builds is appended to `charts`."""
+    def make_chart(chart_type: str, title: str, sql: str, x_key: str, y_keys: list[str],
+                   x_label: str, y_label: str, y_format: str) -> dict:
+        """Draw a chart for the student from one read-only SQLite SELECT statement.
+        Each row of the result becomes one point; x_key and every y_keys entry must be column
+        names (aliases) in the result. chart_type is 'bar' (categories or buckets), 'line'
+        (a trend over an ordered x like years) or 'scatter' (one point per person, exactly one y key).
+        y_keys lists 1-4 numeric columns, one series each. y_format is 'dollars', 'number' or
+        'percent' (percent values are 0-100). Returns the rows so you can describe them, or
+        {"error": message}; fix the problem and call again."""
+        if chart_type not in CHART_TYPES:
+            return {"error": f"chart_type must be one of {sorted(CHART_TYPES)}."}
+        if y_format not in CHART_Y_FORMATS:
+            return {"error": f"y_format must be one of {sorted(CHART_Y_FORMATS)}."}
+        if not 1 <= len(y_keys) <= CHART_MAX_SERIES:
+            return {"error": f"Give between 1 and {CHART_MAX_SERIES} y_keys."}
+        if chart_type == "scatter" and len(y_keys) != 1:
+            return {"error": "A scatter chart takes exactly one y key."}
+        try:
+            result = ai_query(AIQuery(sql=sql, limit=CHART_MAX_POINTS))
+        except HTTPException as e:
+            return {"error": e.detail}
+        missing = [k for k in [x_key, *y_keys] if k not in result["columns"]]
+        if missing:
+            return {"error": f"Columns {missing} are not in the result; it has {result['columns']}."}
+        if not result["rows"]:
+            return {"error": "The query returned no rows, so there is nothing to chart."}
+        charts.append({
+            "type": chart_type, "title": title, "x_key": x_key, "x_label": x_label,
+            "y_keys": y_keys, "y_label": y_label, "y_format": y_format,
+            "data": result["rows"], "sql": sql,
+        })
+        return {"charted": True, "row_count": result["row_count"],
+                "truncated": result["truncated"], "rows": result["rows"][:50]}
+    return make_chart
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=1000)
@@ -297,29 +341,37 @@ def ai_ask(req: AskRequest):
         embedding, hit = None, None
     if hit:
         past_responses.record_hit(hit["id"])
-        return {"answer": hit["answer"], "cached": True,
+        return {"answer": hit["answer"], "charts": hit["charts"], "cached": True,
                 "matched_question": hit["question"], "similarity": hit["similarity"]}
 
     system = (
-        "You answer questions from UMBC students about their program, courses and career outcomes. "
+        "You answer questions from UMBC students about either Computer Science or Information Technology programs, courses and career outcomes. "
         "Use the run_sql tool to look up facts in the database instead of guessing. "
         "Answer in a few plain sentences with concrete numbers; don't show SQL. "
         "If the data can't answer the question, say so.\n\n"
+        "When the student asks for a graph, chart, plot or visualization, or asks how one measure "
+        "varies across many groups (e.g. average salary per GPA, per year, per internship count), "
+        "call make_chart so the answer comes with a chart, then describe what it shows in the text. "
+        "Group continuous values into buckets before charting (e.g. ROUND(final_gpa * 2) / 2 AS gpa "
+        "for half-point GPA bands) and order rows by the x column. Give columns short snake_case "
+        "aliases. Don't say you can't draw charts; the app renders whatever make_chart returns.\n\n"
         "Database schema:\n" + json.dumps(build_schema())
     )
+    charts = []
     try:
         chat = gemini.chats.create(
             model=GEMINI_MODEL,
-            config=types.GenerateContentConfig(system_instruction=system, tools=[run_sql]),
+            config=types.GenerateContentConfig(system_instruction=system,
+                                               tools=[run_sql, chart_tool(charts)]),
         )
-        response = chat.send_message(req.question)  # SDK calls run_sql for Gemini as needed
+        response = chat.send_message(req.question)  # SDK calls the tools for Gemini as needed
     except Exception as e:
         raise HTTPException(502, f"Gemini request failed: {e}")
     if not response.text:
-        return {"answer": "Sorry, I couldn't come up with an answer.", "cached": False}
+        return {"answer": "Sorry, I couldn't come up with an answer.", "charts": charts, "cached": False}
     if embedding is not None:
-        past_responses.save_response(req.question, simplified, major, response.text, embedding)
-    return {"answer": response.text, "cached": False}
+        past_responses.save_response(req.question, simplified, major, response.text, embedding, charts)
+    return {"answer": response.text, "charts": charts, "cached": False}
 
 
 # Most asked questions
