@@ -113,6 +113,58 @@
   transition: transform 150ms ease;
 }
 
+/* Full-width planner card under the path cards */
+.picker__plan {
+  --card: #d97706; /* UMBC gold, darkened for contrast */
+
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 24px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: color-mix(in srgb, var(--card) 6%, var(--bg));
+  border: 1px dashed var(--card);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: transform 150ms ease, box-shadow 150ms ease;
+}
+
+.picker__plan:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow);
+  border-style: solid;
+}
+
+.picker__plan:focus-visible {
+  outline: 3px solid var(--card);
+  outline-offset: 3px;
+}
+
+.picker__plan .picker__icon {
+  flex-shrink: 0;
+  margin-bottom: 0;
+}
+
+.picker__plan-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.picker__plan .picker__cta {
+  margin-top: 0;
+  white-space: nowrap;
+}
+
+.picker__plan:hover .picker__cta span {
+  display: inline-block;
+  transform: translateX(4px);
+  transition: transform 150ms ease;
+}
+
 @media (max-width: 800px) {
   .picker {
     padding: 32px 16px;
@@ -120,5 +172,10 @@
   }
   .picker__grid {
     grid-template-columns: 1fr;
+  }
+  .picker__plan {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
   }
 }
