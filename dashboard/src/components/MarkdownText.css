@@ -1,0 +1,103 @@
+/* Rendered markdown: line breaks come from the markup, not the raw text */
+.markdown {
+  white-space: normal;
+  line-height: 1.6;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown pre,
+.markdown blockquote,
+.markdown table {
+  margin: 0 0 12px;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin: 16px 0 8px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: normal;
+  line-height: 1.3;
+  color: var(--text-h);
+}
+
+.markdown h1 {
+  font-size: 20px;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 22px;
+}
+
+.markdown li + li {
+  margin-top: 4px;
+}
+
+.markdown li::marker {
+  color: var(--card, var(--accent));
+}
+
+.markdown strong {
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.markdown a {
+  color: var(--card, var(--accent));
+}
+
+.markdown code {
+  font-size: 0.875em;
+  padding: 2px 6px;
+}
+
+.markdown pre {
+  padding: 12px 14px;
+  overflow-x: auto;
+  background: var(--code-bg);
+  border-radius: 8px;
+}
+
+.markdown pre code {
+  display: block;
+  padding: 0;
+  background: none;
+}
+
+.markdown blockquote {
+  padding-left: 12px;
+  color: var(--text);
+  border-left: 3px solid var(--border);
+}
+
+.markdown table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+
+.markdown th,
+.markdown td {
+  padding: 6px 12px;
+  text-align: left;
+  border: 1px solid var(--border);
+}
+
+.markdown th {
+  font-weight: 600;
+  background: var(--code-bg);
+}

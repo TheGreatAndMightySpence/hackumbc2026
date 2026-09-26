@@ -1,4 +1,5 @@
 import { useState } from "react";
+import MarkdownText from "./MarkdownText";
 import "./AiQuery.css";
 
 export default function AiQuery() {
@@ -55,7 +56,7 @@ export default function AiQuery() {
       {asked && <p className="ai-query__question">You asked: "{asked}"</p>}
       {loading && <p className="ai-query__answer">Thinking…</p>}
       {error && <p className="ai-query__answer">Couldn't get an answer: {error}</p>}
-      {answer && <p className="ai-query__answer">{answer}</p>}
+      {answer && <MarkdownText className="ai-query__answer">{answer}</MarkdownText>}
     </section>
   );
 }

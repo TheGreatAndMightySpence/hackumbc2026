@@ -5,6 +5,7 @@ import sqlite3
 import time
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
@@ -284,15 +285,18 @@ class AskRequest(BaseModel):
 
 @app.post("/api/ai/ask")
 def ai_ask(req: AskRequest):
-    # Semantic cache: reuse the answer to a sufficiently similar past question.
-    # If embedding fails, just skip the cache rather than failing the request.
+    # Semantic cache: simplify the question, then reuse the answer to a sufficiently
+    # similar past simplified question. If simplifying or embedding fails, just skip
+    # the cache rather than failing the request.
     try:
-        embedding = past_responses.embed(gemini, req.question)
-        hit = past_responses.find_similar(req.question, embedding)
+        simplified, major = past_responses.simplify(gemini, GEMINI_MODEL, req.question)
+        embedding = past_responses.embed(gemini, simplified)
+        hit = past_responses.find_similar(simplified, embedding)
     except Exception as e:
         print(f"Semantic cache unavailable: {e}")
         embedding, hit = None, None
     if hit:
+        past_responses.record_hit(hit["id"])
         return {"answer": hit["answer"], "cached": True,
                 "matched_question": hit["question"], "similarity": hit["similarity"]}
 
@@ -309,11 +313,18 @@ def ai_ask(req: AskRequest):
             config=types.GenerateContentConfig(system_instruction=system, tools=[run_sql]),
         )
         response = chat.send_message(req.question)  # SDK calls run_sql for Gemini as needed
-        print(response.text)
     except Exception as e:
         raise HTTPException(502, f"Gemini request failed: {e}")
     if not response.text:
         return {"answer": "Sorry, I couldn't come up with an answer.", "cached": False}
     if embedding is not None:
-        past_responses.save_response(req.question, response.text, embedding)
+        past_responses.save_response(req.question, simplified, major, response.text, embedding)
     return {"answer": response.text, "cached": False}
+
+
+# Most asked questions
+#   GET /api/top-questions/{major} -> the 10 most asked past questions for 'cs', 'info' or 'both'
+
+@app.get("/api/top-questions/{major}")
+def top_questions(major: Literal["cs", "info", "both"]):
+    return past_responses.top_questions(major, limit=10)

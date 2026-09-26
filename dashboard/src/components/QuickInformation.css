@@ -47,6 +47,14 @@
   outline-offset: -3px;
 }
 
-.quick-info__item p {
+.quick-info__count {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
+}
+
+.quick-info__answer {
   padding: 0 16px 16px;
 }

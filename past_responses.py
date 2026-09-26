@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import sqlite3
@@ -7,8 +8,10 @@ from google.genai import types
 
 
 # Semantic cache for the AI assistant
-#   Every answered question is stored with its embedding. A new question whose embedding
-#   is close enough (cosine similarity) to a past one reuses that answer instead of calling Gemini.
+#   Every question is first rewritten by Gemini into a short, simplified form (and tagged with
+#   the major it relates to). The simplified question is embedded and stored; a new question whose
+#   simplified embedding is close enough (cosine similarity) to a past one reuses that answer
+#   instead of calling Gemini, and bumps that row's times_asked counter.
 
 DB_PATH = Path("past_responses.db")
 EMBED_MODEL = os.getenv("GEMINI_EMBED_MODEL", "gemini-embedding-001")
@@ -27,13 +30,61 @@ def create_table():
         CREATE TABLE IF NOT EXISTS past_responses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             question TEXT NOT NULL,
+            simplified_question TEXT,
+            major TEXT CHECK (major IN ('cs', 'info', 'both')),  -- NULL = not about a major
             answer TEXT NOT NULL,
-            embedding BLOB NOT NULL
+            embedding BLOB NOT NULL,
+            times_asked INTEGER NOT NULL DEFAULT 1
         )
         """
     )
+    # Add the newer columns to a database created before they existed
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(past_responses)")}
+    for column, ddl in [("simplified_question", "TEXT"),
+                        ("major", "TEXT"),
+                        ("times_asked", "INTEGER NOT NULL DEFAULT 1")]:
+        if column not in existing:
+            conn.execute(f"ALTER TABLE past_responses ADD COLUMN {column} {ddl}")
     conn.commit()
     conn.close()
+
+
+MAJORS = ("cs", "info", "both")
+SIMPLIFY_PROMPT = (
+    "You normalize questions from UMBC students so similar questions can be matched.\n"
+    "1. Rewrite the question as a short, plain question with filler, greetings and personal "
+    "context removed. Keep every detail that changes the answer: numbers, years, course codes "
+    "(e.g. CMSC 341) and which statistic is asked for (average, median, highest, ...). "
+    "Write Computer Science as CS and Information Systems as IS.\n"
+    "2. Classify which major the question relates to: 'cs' (Computer Science), "
+    "'info' (Information Systems), 'both', or 'none' if it isn't about a specific major."
+)
+SIMPLIFY_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "simplified": {"type": "STRING"},
+        "major": {"type": "STRING", "enum": [*MAJORS, "none"]},
+    },
+    "required": ["simplified", "major"],
+}
+
+
+def simplify(client, model: str, question: str) -> tuple[str, str | None]:
+    """(simplified question, major) where major is 'cs', 'info', 'both' or None."""
+    result = client.models.generate_content(
+        model=model,
+        contents=question,
+        config=types.GenerateContentConfig(
+            system_instruction=SIMPLIFY_PROMPT,
+            response_mime_type="application/json",
+            response_schema=SIMPLIFY_SCHEMA,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        ),
+    )
+    data = json.loads(result.text)
+    simplified = data.get("simplified", "").strip() or question
+    major = data.get("major")
+    return simplified, major if major in MAJORS else None
 
 
 def embed(client, text: str) -> np.ndarray:
@@ -61,33 +112,60 @@ def key_terms(question: str) -> set:
     return terms
 
 
-def find_similar(question: str, embedding: np.ndarray,
+def find_similar(simplified: str, embedding: np.ndarray,
                  threshold: float = SIMILARITY_THRESHOLD) -> dict | None:
-    """Most similar past question at or above the threshold with the same key terms, or None."""
+    """Most similar past simplified question at or above the threshold with the same key terms, or None."""
     conn = connect()
-    rows = conn.execute("SELECT question, answer, embedding FROM past_responses").fetchall()
+    # Rows saved before simplification existed compare against their original question
+    rows = conn.execute(
+        "SELECT id, COALESCE(simplified_question, question), answer, embedding FROM past_responses"
+    ).fetchall()
     conn.close()
     # Skip rows from a different embedding model (different vector size), and rows
     # asking about a different year/course/major/statistic however similar they read
-    terms = key_terms(question)
-    rows = [r for r in rows if len(r[2]) == embedding.nbytes and key_terms(r[0]) == terms]
+    terms = key_terms(simplified)
+    rows = [r for r in rows if len(r[3]) == embedding.nbytes and key_terms(r[1]) == terms]
     if not rows:
         return None
 
-    matrix = np.stack([np.frombuffer(r[2], dtype=np.float32) for r in rows])
+    matrix = np.stack([np.frombuffer(r[3], dtype=np.float32) for r in rows])
     scores = matrix @ embedding
     best = int(np.argmax(scores))
     if scores[best] < threshold:
         return None
-    question, answer, _ = rows[best]
-    return {"question": question, "answer": answer, "similarity": float(scores[best])}
+    row_id, question, answer, _ = rows[best]
+    return {"id": row_id, "question": question, "answer": answer, "similarity": float(scores[best])}
 
 
-def save_response(question: str, answer: str, embedding: np.ndarray):
+def record_hit(row_id: int):
+    """Count another asking of a cached question."""
+    conn = connect()
+    conn.execute("UPDATE past_responses SET times_asked = times_asked + 1 WHERE id = ?", (row_id,))
+    conn.commit()
+    conn.close()
+
+
+def top_questions(major: str, limit: int = 10) -> list[dict]:
+    """Most asked questions tagged with this major ('cs', 'info' or 'both')."""
+    conn = connect()
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, question, COALESCE(simplified_question, question) AS simplified_question, "
+        "major, answer, times_asked FROM past_responses "
+        "WHERE major = ? ORDER BY times_asked DESC, id LIMIT ?",
+        (major, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def save_response(question: str, simplified: str, major: str | None,
+                  answer: str, embedding: np.ndarray):
     conn = connect()
     conn.execute(
-        "INSERT INTO past_responses (question, answer, embedding) VALUES (?, ?, ?)",
-        (question, answer, embedding.astype(np.float32).tobytes()),
+        "INSERT INTO past_responses (question, simplified_question, major, answer, embedding) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (question, simplified, major, answer, embedding.astype(np.float32).tobytes()),
     )
     conn.commit()
     conn.close()

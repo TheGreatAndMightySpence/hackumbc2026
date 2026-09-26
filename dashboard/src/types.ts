@@ -37,9 +37,13 @@ export interface CourseMapData {
   edges: PrereqEdge[];
 }
 
-export interface FaqItem {
-  id: string;
-  question: string;
+export type MajorKey = "cs" | "info" | "both";
+
+export interface TopQuestion {
+  id: number;
+  question: string; // as the student typed it
+  simplified_question: string; // short normalized form
+  major: MajorKey;
   answer: string;
-  majors: string[]; // empty = applies to every major
+  times_asked: number;
 }
