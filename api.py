@@ -171,6 +171,22 @@ AI_CONVENTIONS = [
 _AI_ALLOWED_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION,
                        getattr(sqlite3, "SQLITE_RECURSIVE", 33)}
 
+# Student IDs never leave the server through the AI: they're redacted from query results
+# (so the model never sees them), from its answers and charts, and from cached answers.
+# The model can still JOIN on campus_id; it just never gets the values back.
+STUDENT_ID_PATTERN = re.compile(r"\bCID[\s_-]*\d+\b", re.IGNORECASE)
+REDACTED_ID = "[student ID hidden]"
+
+def redact_ids(value):
+    """Replace every student ID in a string, or anywhere inside a list/dict, with REDACTED_ID."""
+    if isinstance(value, str):
+        return STUDENT_ID_PATTERN.sub(REDACTED_ID, value)
+    if isinstance(value, list):
+        return [redact_ids(v) for v in value]
+    if isinstance(value, dict):
+        return {k: redact_ids(v) for k, v in value.items()}
+    return value
+
 def connect_readonly():
     """Read-only file handle + an authorizer that rejects anything but reads."""
     conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
@@ -258,7 +274,7 @@ def ai_query(req: AIQuery):
     rows = rows[:req.limit]
     return {
         "columns": columns,
-        "rows": [dict(zip(columns, r)) for r in rows],
+        "rows": redact_ids([dict(zip(columns, r)) for r in rows]),
         "row_count": len(rows),
         "truncated": truncated,
     }
@@ -326,6 +342,11 @@ def chart_tool(charts: list):
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=1000)
+    major: Literal["cs", "info", "both"] = Field(
+        "both", description="The page the question was asked from; assumed when the question names no major.")
+
+MAJOR_FULL_NAMES = {"cs": "Computer Science", "info": "Information Systems",
+                    "both": "both Computer Science and Information Systems"}
 
 @app.post("/api/ai/ask")
 def ai_ask(req: AskRequest):
@@ -333,22 +354,27 @@ def ai_ask(req: AskRequest):
     # similar past simplified question. If simplifying or embedding fails, just skip
     # the cache rather than failing the request.
     try:
-        simplified, major = past_responses.simplify(gemini, GEMINI_MODEL, req.question)
+        simplified, major = past_responses.simplify(gemini, GEMINI_MODEL, req.question, req.major)
         embedding = past_responses.embed(gemini, simplified)
-        hit = past_responses.find_similar(simplified, embedding)
+        hit = past_responses.find_similar(simplified, major, embedding)
     except Exception as e:
         print(f"Semantic cache unavailable: {e}")
         embedding, hit = None, None
     if hit:
         past_responses.record_hit(hit["id"])
-        return {"answer": hit["answer"], "charts": hit["charts"], "cached": True,
+        return {"answer": redact_ids(hit["answer"]), "charts": redact_ids(hit["charts"]), "cached": True,
                 "matched_question": hit["question"], "similarity": hit["similarity"]}
 
     system = (
-        "You answer questions from UMBC students about either Computer Science or Information Technology programs, courses and career outcomes. "
+        "You answer questions from UMBC students about the Computer Science and Information Systems programs, courses and career outcomes. "
+        f"The student is asking from the {MAJOR_FULL_NAMES[req.major]} page. If the question doesn't name "
+        "a major, assume it is about that page's major(s): filter on major, and when the page covers both, "
+        "compare the two majors side by side. If the question names a major, answer about that one instead. "
         "Use the run_sql tool to look up facts in the database instead of guessing. "
         "Answer in a few plain sentences with concrete numbers; don't show SQL. "
-        "If the data can't answer the question, say so.\n\n"
+        "If the data can't answer the question, say so. "
+        "Never reveal student IDs (campus_id) or anything identifying an individual student; "
+        "answer with aggregates instead.\n\n"
         "When the student asks for a graph, chart, plot or visualization, or asks how one measure "
         "varies across many groups (e.g. average salary per GPA, per year, per internship count), "
         "call make_chart so the answer comes with a chart, then describe what it shows in the text. "
@@ -369,9 +395,10 @@ def ai_ask(req: AskRequest):
         raise HTTPException(502, f"Gemini request failed: {e}")
     if not response.text:
         return {"answer": "Sorry, I couldn't come up with an answer.", "charts": charts, "cached": False}
+    answer, charts = redact_ids(response.text), redact_ids(charts)
     if embedding is not None:
-        past_responses.save_response(req.question, simplified, major, response.text, embedding, charts)
-    return {"answer": response.text, "charts": charts, "cached": False}
+        past_responses.save_response(req.question, simplified, major, answer, embedding, charts)
+    return {"answer": answer, "charts": charts, "cached": False}
 
 
 # Most asked questions
@@ -379,4 +406,4 @@ def ai_ask(req: AskRequest):
 
 @app.get("/api/top-questions/{major}")
 def top_questions(major: Literal["cs", "info", "both"]):
-    return past_responses.top_questions(major, limit=10)
+    return redact_ids(past_responses.top_questions(major, limit=10))

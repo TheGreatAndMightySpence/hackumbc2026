@@ -1,3 +1,5 @@
+import type { MajorKey } from "./types";
+
 // The three ways into the app. `majors` is the value(s) the API uses for this path.
 export type PathId = "cs" | "it" | "both";
 
@@ -34,3 +36,12 @@ export const PATHS: PathOption[] = [
 ];
 
 export const getPath = (id: PathId): PathOption => PATHS.find(p => p.id === id)!;
+
+const MAJOR_KEYS: Record<string, MajorKey> = {
+  "Computer Science": "cs",
+  "Information Systems": "info",
+};
+
+// The key the AI endpoints use for a page: one major -> that major, several (or none) -> "both"
+export const majorKey = (majors: string[] = []): MajorKey =>
+  majors.length === 1 ? MAJOR_KEYS[majors[0]] ?? "both" : "both";

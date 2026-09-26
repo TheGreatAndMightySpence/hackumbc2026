@@ -1,21 +1,16 @@
 import { useApi } from "../api";
-import type { MajorKey, TopQuestion } from "../types";
+import { majorKey } from "../paths";
+import type { TopQuestion } from "../types";
 import AiChart from "./AiChart";
 import MarkdownText from "./MarkdownText";
 import "./QuickInformation.css";
-
-const MAJOR_KEYS: Record<string, MajorKey> = {
-  "Computer Science": "cs",
-  "Information Systems": "info",
-};
 
 interface Props {
   majors?: string[]; // one major -> that major's questions; several (or none) -> questions about both
 }
 
 export default function QuickInformation({ majors = [] }: Props) {
-  const key: MajorKey = majors.length === 1 ? MAJOR_KEYS[majors[0]] ?? "both" : "both";
-  const { data, loading, error } = useApi<TopQuestion[]>(`/api/top-questions/${key}`);
+  const { data, loading, error } = useApi<TopQuestion[]>(`/api/top-questions/${majorKey(majors)}`);
 
   if (loading) return <p>Loading…</p>;
   if (error) return <p>Couldn't load questions: {error}</p>;

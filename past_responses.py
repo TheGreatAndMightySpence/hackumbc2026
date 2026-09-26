@@ -52,15 +52,21 @@ def create_table():
 
 
 MAJORS = ("cs", "info", "both")
+MAJOR_NAMES = {"cs": "CS", "info": "IS", "both": "CS and IS"}
 SIMPLIFY_PROMPT = (
-    "You normalize questions from UMBC students so similar questions can be matched.\n"
-    "1. Rewrite the question as a short, plain question with filler, greetings and personal "
+    "You normalize questions from UMBC students so similar questions can be matched. "
+    "Each question is asked from a page about CS, IS, or both; the page is given before the question.\n"
+    "1. Classify which major the question is about: 'cs' (Computer Science), "
+    "'info' (Information Systems) or 'both'. If the question names a major, or says 'the two' / "
+    "'both', go by that. Otherwise, including open-ended questions like 'What are the degree types "
+    "and earnings?', assume it is about the page's major. Use 'none' only for questions that have "
+    "nothing to do with UMBC programs, courses, students, grades or careers (e.g. small talk).\n"
+    "2. Rewrite the question as a short, plain question with filler, greetings and personal "
     "context removed. Keep every detail that changes the answer: numbers, years, course codes "
     "(e.g. CMSC 341), which statistic is asked for (average, median, highest, ...) and whether "
-    "a graph or chart is asked for. "
-    "Write Computer Science as CS and Information Systems as IS.\n"
-    "2. Classify which major the question relates to: 'cs' (Computer Science), "
-    "'info' (Information Systems), 'both', or 'none' if it isn't about a specific major."
+    "a graph or chart is asked for. Unless the major is 'none', name it in the rewrite, "
+    "writing Computer Science as CS, Information Systems as IS and both as 'CS and IS' "
+    "(e.g. 'What are the degree types and earnings for CS?')."
 )
 SIMPLIFY_SCHEMA = {
     "type": "OBJECT",
@@ -72,11 +78,12 @@ SIMPLIFY_SCHEMA = {
 }
 
 
-def simplify(client, model: str, question: str) -> tuple[str, str | None]:
-    """(simplified question, major) where major is 'cs', 'info', 'both' or None."""
+def simplify(client, model: str, question: str, page_major: str = "both") -> tuple[str, str | None]:
+    """(simplified question, major) where major is 'cs', 'info', 'both' or None.
+    page_major is the page the question was asked from, assumed when the question names no major."""
     result = client.models.generate_content(
         model=model,
-        contents=question,
+        contents=f"Page: {MAJOR_NAMES[page_major]}\nQuestion: {question}",
         config=types.GenerateContentConfig(
             system_instruction=SIMPLIFY_PROMPT,
             response_mime_type="application/json",
@@ -121,14 +128,15 @@ def key_terms(question: str) -> set:
     return terms
 
 
-def find_similar(simplified: str, embedding: np.ndarray,
+def find_similar(simplified: str, major: str | None, embedding: np.ndarray,
                  threshold: float = SIMILARITY_THRESHOLD) -> dict | None:
-    """Most similar past simplified question at or above the threshold with the same key terms, or None."""
+    """Most similar past simplified question about the same major, at or above the threshold
+    and with the same key terms, or None."""
     conn = connect()
     # Rows saved before simplification existed compare against their original question
     rows = conn.execute(
         "SELECT id, COALESCE(simplified_question, question), answer, embedding, charts "
-        "FROM past_responses"
+        "FROM past_responses WHERE major IS ?", (major,)
     ).fetchall()
     conn.close()
     # Skip rows from a different embedding model (different vector size), and rows
@@ -158,18 +166,18 @@ def record_hit(row_id: int):
 
 def top_questions(major: str, limit: int = 10) -> list[dict]:
     """Most asked questions relevant to this major ('cs', 'info' or 'both').
-    'cs' and 'info' also include questions about both majors, 'both' includes either major,
-    and questions not about a specific major fill any remaining spots. Among equally asked
-    questions, the closest match to the major comes first, then the newest."""
+    'cs' and 'info' also include questions about both majors, and 'both' includes either major.
+    Questions not about a specific major are left out. Among equally asked questions, the
+    closest match to the major comes first, then the newest."""
     relevant = ("cs", "info", "both") if major == "both" else (major, "both")
     conn = connect()
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         "SELECT id, question, COALESCE(simplified_question, question) AS simplified_question, "
         "major, answer, times_asked, charts FROM past_responses "
-        f"WHERE major IN ({', '.join('?' * len(relevant))}) OR major IS NULL "
+        f"WHERE major IN ({', '.join('?' * len(relevant))}) "
         "ORDER BY times_asked DESC, "
-        "CASE WHEN major = ? THEN 0 WHEN major IS NOT NULL THEN 1 ELSE 2 END, id DESC LIMIT ?",
+        "CASE WHEN major = ? THEN 0 ELSE 1 END, id DESC LIMIT ?",
         (*relevant, major, limit),
     ).fetchall()
     conn.close()

@@ -35,7 +35,7 @@ export default function PathPage({ pathId, onChangePath }: Props) {
       <main className="path-page__content">
         <h1>What would you like to know?</h1>
         <QuickInformation majors={path.majors} />
-        <AiQuery />
+        <AiQuery majors={path.majors} />
         <CourseMap />
         <SalaryByYearChart />
         <InternshipChart />

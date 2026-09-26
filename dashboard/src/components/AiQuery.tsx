@@ -1,10 +1,15 @@
 import { useState } from "react";
+import { majorKey } from "../paths";
 import type { AiChartSpec, AskResponse } from "../types";
 import AiChart from "./AiChart";
 import MarkdownText from "./MarkdownText";
 import "./AiQuery.css";
 
-export default function AiQuery() {
+interface Props {
+  majors?: string[]; // the page's major(s); questions that don't name a major are assumed to be about these
+}
+
+export default function AiQuery({ majors = [] }: Props) {
   const [question, setQuestion] = useState("");
   const [asked, setAsked] = useState<string | null>(null);
   const [answer, setAnswer] = useState<string | null>(null);
@@ -22,7 +27,7 @@ export default function AiQuery() {
       const res = await fetch("/api/ai/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q }),
+        body: JSON.stringify({ question: q, major: majorKey(majors) }),
       });
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       const data = (await res.json()) as AskResponse;
