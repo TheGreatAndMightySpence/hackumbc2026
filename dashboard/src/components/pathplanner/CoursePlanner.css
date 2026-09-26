@@ -1,0 +1,239 @@
+.planner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.planner__summary {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.planner__summary h2 {
+  margin: 0;
+}
+
+.planner__summary button,
+.planner__semester-head button {
+  font: inherit;
+  font-size: 14px;
+  padding: 6px 14px;
+  color: var(--text-h);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.planner__summary button {
+  margin-left: auto;
+}
+
+.planner__summary button:hover:not(:disabled),
+.planner__semester-head button:hover {
+  border-color: var(--card);
+  color: var(--card);
+}
+
+.planner__summary button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.planner__hint {
+  font-size: 15px;
+}
+
+.planner__muted {
+  font-size: 13px;
+}
+
+/* ---------- Drop-zone states while dragging ---------- */
+.is-open {
+  outline: 2px dashed color-mix(in srgb, var(--card) 60%, transparent);
+  outline-offset: 2px;
+}
+
+.is-over {
+  outline: 2px solid var(--card);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--card) 12%, var(--bg));
+}
+
+.is-closed {
+  opacity: 0.45;
+}
+
+/* ---------- Pool: levels left to right ---------- */
+.planner__pool {
+  display: flex;
+  gap: 40px;
+  overflow-x: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: background 150ms ease, opacity 150ms ease;
+}
+
+.planner__level {
+  position: relative;
+  flex: 0 0 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Arrow into the next level */
+.planner__level:not(:last-child)::after {
+  content: "→";
+  position: absolute;
+  top: 6px;
+  right: -31px;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--card);
+}
+
+.planner__level-head {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  padding-bottom: 4px;
+  border-bottom: 3px solid var(--card);
+}
+
+.planner__level-head strong {
+  color: var(--text-h);
+  font-size: 16px;
+}
+
+/* ---------- Course cards ---------- */
+.planner__course {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.3;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px dashed var(--card);
+  border-radius: 8px;
+  cursor: grab;
+}
+
+.planner__course:active {
+  cursor: grabbing;
+}
+
+.planner__course > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.planner__course p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.planner__course--placed {
+  border-style: solid;
+  border-left: 5px solid var(--card);
+}
+
+.planner__course button {
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  color: var(--text);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.planner__course button:hover {
+  color: #dc2626;
+}
+
+.planner__notice {
+  font-size: 14px;
+  padding: 8px 12px;
+  color: #b45309;
+  background: color-mix(in srgb, #d97706 12%, var(--bg));
+  border-radius: 8px;
+}
+
+/* ---------- Semesters, stacked ---------- */
+.planner__semesters {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.planner__semester {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--card);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--card) 4%, var(--bg));
+  transition: background 150ms ease, opacity 150ms ease;
+}
+
+.planner__semester-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.planner__semester-head strong {
+  color: var(--text-h);
+}
+
+.planner__semester-head button {
+  margin-left: auto;
+  font-size: 13px;
+  padding: 4px 10px;
+}
+
+.planner__over {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.planner__drop {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+  min-height: 48px;
+  align-items: start;
+}
+
+.planner__add {
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 14px;
+  color: var(--card);
+  background: transparent;
+  border: 2px dashed var(--card);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+.planner__add:hover {
+  background: color-mix(in srgb, var(--card) 8%, var(--bg));
+}
+
+.planner__add:focus-visible {
+  outline: 3px solid var(--card);
+  outline-offset: 2px;
+}

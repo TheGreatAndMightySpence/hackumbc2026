@@ -1,5 +1,5 @@
 import { useState } from "react";
-import CoursePlanner from "./CoursePlanner";
+import CoursePlanner from "./pathplanner/CoursePlanner";
 import "./PathPage.css";
 
 interface Props {
