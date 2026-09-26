@@ -8,6 +8,9 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+import past_responses
 
 load_dotenv()
 api_key = os.getenv("MY_API_KEY")
@@ -258,3 +261,59 @@ def ai_query(req: AIQuery):
         "row_count": len(rows),
         "truncated": truncated,
     }
+
+
+
+# Natural-language answers via Gemini
+#   POST /api/ai/ask {question} -> {answer}
+#   The key stays on the server; Gemini writes SQL, we run it read-only, Gemini explains the result.
+
+gemini = genai.Client(api_key=api_key)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")  # free tier on gemini-3.8-flash is only 5 req/min
+
+def run_sql(sql: str) -> dict:
+    """Run one read-only SQLite SELECT statement against the UMBC database and return its rows.
+    On error, returns {"error": message}; fix the SQL and try again."""
+    try:
+        return ai_query(AIQuery(sql=sql))
+    except HTTPException as e:
+        return {"error": e.detail}
+
+class AskRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=1000)
+
+@app.post("/api/ai/ask")
+def ai_ask(req: AskRequest):
+    # Semantic cache: reuse the answer to a sufficiently similar past question.
+    # If embedding fails, just skip the cache rather than failing the request.
+    try:
+        embedding = past_responses.embed(gemini, req.question)
+        hit = past_responses.find_similar(req.question, embedding)
+    except Exception as e:
+        print(f"Semantic cache unavailable: {e}")
+        embedding, hit = None, None
+    if hit:
+        return {"answer": hit["answer"], "cached": True,
+                "matched_question": hit["question"], "similarity": hit["similarity"]}
+
+    system = (
+        "You answer questions from UMBC students about their program, courses and career outcomes. "
+        "Use the run_sql tool to look up facts in the database instead of guessing. "
+        "Answer in a few plain sentences with concrete numbers; don't show SQL. "
+        "If the data can't answer the question, say so.\n\n"
+        "Database schema:\n" + json.dumps(build_schema())
+    )
+    try:
+        chat = gemini.chats.create(
+            model=GEMINI_MODEL,
+            config=types.GenerateContentConfig(system_instruction=system, tools=[run_sql]),
+        )
+        response = chat.send_message(req.question)  # SDK calls run_sql for Gemini as needed
+        print(response.text)
+    except Exception as e:
+        raise HTTPException(502, f"Gemini request failed: {e}")
+    if not response.text:
+        return {"answer": "Sorry, I couldn't come up with an answer.", "cached": False}
+    if embedding is not None:
+        past_responses.save_response(req.question, response.text, embedding)
+    return {"answer": response.text, "cached": False}
