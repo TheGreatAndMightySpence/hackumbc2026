@@ -121,15 +121,38 @@
   background: var(--bg);
   border: 1px dashed var(--card);
   border-radius: 8px;
-  cursor: grab;
 }
 
-.planner__course:active {
-  cursor: grabbing;
-}
-
-.planner__course > div {
+/* The part you grab; the × button sits outside it */
+.planner__handle {
   flex: 1;
+  min-width: 0;
+  cursor: grab;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-touch-callout: none; /* no iOS menu on press-and-hold */
+}
+
+.planner__handle:focus-visible {
+  outline: 3px solid var(--card);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+/* The original stays put while its copy follows the pointer */
+.planner__course.is-dragging {
+  opacity: 0.35;
+}
+
+.planner__course--overlay {
+  width: 200px;
+  box-sizing: border-box;
+  cursor: grabbing;
+  border-style: solid;
+  box-shadow: var(--shadow);
+}
+
+.planner__card-body {
   min-width: 0;
 }
 
