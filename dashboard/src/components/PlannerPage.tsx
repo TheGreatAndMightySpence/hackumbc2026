@@ -1,13 +1,23 @@
+import { useState } from "react";
+import CoursePlanner from "./CoursePlanner";
 import "./PathPage.css";
 
 interface Props {
   onBack: () => void;
 }
 
-// TODO: the actual planner (semesters, courses per term, credit totals)
+// major -> the page theme it switches to (blue for CS, green for IS)
+const MAJORS: Record<string, string> = {
+  "Computer Science": "cs",
+  "Information Systems": "it",
+};
+
 export default function PlannerPage({ onBack }: Props) {
+  const [major, setMajor] = useState("");
+  const theme = MAJORS[major] ?? "plan";
+
   return (
-    <div className="path-page path-page--plan">
+    <div className={`path-page path-page--${theme}`}>
       <header className="path-page__bar">
         <div className="path-page__title">
           <div>
@@ -21,7 +31,21 @@ export default function PlannerPage({ onBack }: Props) {
       </header>
 
       <main className="path-page__content">
-        <p>Semester planning is coming soon.</p>
+        <label className="path-page__select">
+          <span>Your major</span>
+          <div className="path-page__select-box">
+            <select value={major} onChange={e => setMajor(e.target.value)}>
+              <option value="" disabled>Choose a major…</option>
+              {Object.keys(MAJORS).map(m => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          </div>
+        </label>
+        {/* key resets the picks when the major changes */}
+        {major
+          ? <CoursePlanner key={major} major={major} />
+          : <p>Pick a major to start planning your semesters.</p>}
       </main>
     </div>
   );

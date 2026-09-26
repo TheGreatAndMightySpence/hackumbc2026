@@ -81,6 +81,64 @@
   padding: 32px;
 }
 
+.path-page__select {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.path-page__select > span {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--card);
+}
+
+.path-page__select-box {
+  position: relative;
+}
+
+/* chevron drawn with borders so it follows the page colour */
+.path-page__select-box::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 22px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--card);
+  border-bottom: 2px solid var(--card);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+
+.path-page__select select {
+  width: 100%;
+  font: inherit;
+  font-size: 16px;
+  padding: 14px 48px 14px 20px;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  appearance: none;
+  cursor: pointer;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.path-page__select select:hover {
+  border-color: var(--card);
+}
+
+.path-page__select select:focus {
+  outline: none;
+  border-color: var(--card);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--card) 18%, transparent);
+}
+
 @media (max-width: 800px) {
   .path-page__bar,
   .path-page__content {
