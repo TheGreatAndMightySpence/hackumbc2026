@@ -1,0 +1,124 @@
+/* Uses the color variables from index.css, so it follows light/dark mode */
+
+.picker {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 40px;
+  padding: 48px 32px;
+}
+
+.picker__header h1 {
+  margin: 8px 0 16px;
+  line-height: 1.1; /* index.css sets a fixed line-height that is too tight for big text */
+}
+
+.picker__eyebrow {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.picker__lede {
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+.picker__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+
+.picker__card {
+  /* per-card accent, overridden below */
+  --card: var(--accent);
+
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 28px 24px 24px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-top: 4px solid var(--card);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
+}
+
+.picker__card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow);
+  border-color: var(--card);
+}
+
+.picker__card:focus-visible {
+  outline: 3px solid var(--card);
+  outline-offset: 3px;
+}
+
+.picker__card--cs   { --card: #2563eb; }
+.picker__card--it   { --card: #16a34a; }
+.picker__card--both { --card: var(--accent); }
+
+.picker__icon {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 8px;
+  border-radius: 12px;
+  color: var(--card);
+  background: color-mix(in srgb, var(--card) 12%, transparent);
+}
+
+.picker__tagline {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--card);
+}
+
+.picker__title {
+  font-family: var(--heading);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--text-h);
+}
+
+.picker__desc {
+  flex: 1;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.picker__cta {
+  margin-top: 12px;
+  font-weight: 600;
+  color: var(--card);
+}
+
+.picker__card:hover .picker__cta span {
+  display: inline-block;
+  transform: translateX(4px);
+  transition: transform 150ms ease;
+}
+
+@media (max-width: 800px) {
+  .picker {
+    padding: 32px 16px;
+    gap: 28px;
+  }
+  .picker__grid {
+    grid-template-columns: 1fr;
+  }
+}

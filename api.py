@@ -1,5 +1,17 @@
+import re
 import sqlite3
-from fastapi import FastAPI
+import time
+from functools import lru_cache
+from pathlib import Path
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+
+MAJOR_SUBJECT = {"Computer Science": "CMSC", "Information Systems": "IS"}
+
+# Helper Functions
+def split_list(value):
+    """'A|B|C' -> ['A','B','C'];  NULL (was 'Not Applicable') -> []"""
+    return [] if value is None else [v.strip() for v in value.split("|")]
 
 app = FastAPI()
 DB_PATH = "umbc.db"
@@ -43,3 +55,183 @@ def salary_by_year_for_major(major: str):
         FROM alumni WHERE major = ?
         GROUP BY graduation_year ORDER BY graduation_year
     """, (major,))
+
+
+
+#Course map api
+
+
+@app.get("/api/course-map/{major}")
+def course_map(major: str, electives: bool = False):
+    catalog = {c["course_id"]: c for c in query("SELECT * FROM course_catalog")}
+
+    # 1. Pick the courses: required for this major (+ optionally the major's electives)
+    chosen = {
+        cid for cid, c in catalog.items()
+        if major in split_list(c["required_for_majors"])
+        or (electives and c["course_type"] == "Elective"
+            and c["subject"] == MAJOR_SUBJECT.get(major))
+    }
+
+    # 2. Pull in any prerequisite that isn't already on the map, so no arrow dangles
+    todo = list(chosen)
+    while todo:
+        for group in split_list(catalog[todo.pop()]["prerequisite_ids"]):
+            options = [o.strip() for o in group.split(" or ")]
+            if not any(o in chosen for o in options):
+                chosen.add(options[0])
+                todo.append(options[0])
+
+    # 3. Edges: prerequisite -> course.  "A or B" draws both, flagged as alternatives
+    edges = []
+    for cid in chosen:
+        for group in split_list(catalog[cid]["prerequisite_ids"]):
+            options = [o.strip() for o in group.split(" or ")]
+            for o in options:
+                if o in chosen:
+                    edges.append({"id": f"{o}->{cid}", "source": o, "target": cid,
+                                  "alternative": len(options) > 1})
+
+    # 4. Earliest semester you could take it = length of the longest prerequisite chain
+    memo = {}
+    def semester(cid):
+        if cid not in memo:
+            groups = split_list(catalog[cid]["prerequisite_ids"])
+            memo[cid] = 1 + max(
+                (min(semester(o.strip()) for o in g.split(" or ") if o.strip() in chosen)
+                 for g in groups), default=0)
+        return memo[cid]
+
+    nodes = [{
+        "id": cid,
+        "title": catalog[cid]["course_title"],
+        "credits": catalog[cid]["credits"],
+        "type": catalog[cid]["course_type"],
+        "terms": split_list(catalog[cid]["typical_terms_offered"]),
+        "semester": semester(cid),
+    } for cid in sorted(chosen)]
+
+    return {"nodes": nodes, "edges": edges}
+
+
+
+# General query api for the AI assistant
+#   GET  /api/ai/schema -> tables, columns, descriptions, common values, gotchas
+#   POST /api/ai/query  -> run one read-only SELECT, get rows back
+
+
+AI_DEFAULT_LIMIT = 200
+AI_MAX_LIMIT = 5000
+AI_TIMEOUT_SECONDS = 5
+AI_MAX_ENUM_VALUES = 25  # text columns with this many distinct values or fewer list them in the schema
+
+# How the CSVs look once loaded into SQLite (differs from the CSV docs in data/)
+AI_CONVENTIONS = [
+    "SQLite dialect. Only a single SELECT (or WITH ... SELECT) statement is allowed.",
+    "'Not Applicable' from the CSVs is stored as NULL. Use IS NULL / IS NOT NULL, never = 'Not Applicable'.",
+    "Booleans are stored as integers 1 (TRUE) / 0 (FALSE), or NULL where not applicable.",
+    "Pipe-delimited list columns (skill_tags, prerequisite_ids, required_for_majors, typical_terms_offered, "
+    "role_skill_tags) are plain text like 'Python|SQL'. Match one item with "
+    "'|' || col || '|' LIKE '%|Python|%'.",
+    "campus_id (CID-NNNNNN) is the person key. A person is in students_current OR alumni, never both. "
+    "transcripts and student_experience join on campus_id to either; employment_history is alumni only.",
+    "course_id joins transcripts to course_catalog.",
+    "Terms look like 'Fall 2023'; season order within a year is Spring, Summer, Fall. Dates are 'YYYY-MM-DD'.",
+    "Grades are A B C D F W IP on a 4.0 scale; W and IP have NULL grade_points and are excluded from GPA.",
+    "Money is whole nominal US dollars. The dataset's 'today' is 2026-09-15.",
+]
+
+_AI_ALLOWED_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION,
+                       getattr(sqlite3, "SQLITE_RECURSIVE", 33)}
+
+def connect_readonly():
+    """Read-only file handle + an authorizer that rejects anything but reads."""
+    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    conn.set_authorizer(lambda action, *_:
+                        sqlite3.SQLITE_OK if action in _AI_ALLOWED_ACTIONS else sqlite3.SQLITE_DENY)
+    return conn
+
+def parse_table_doc(md_path):
+    """Pull the summary line, field descriptions and gotchas out of a data/*.md file."""
+    if not md_path.exists():
+        return "", {}, []
+    text = md_path.read_text(encoding="utf-8")
+    summary = next((l.strip() for l in text.splitlines()[1:] if l.strip() and not l.startswith("#")), "")
+    fields = {m[1]: m[2].strip()
+              for m in re.finditer(r"^\| `(\w+)` \| [^|]+ \| (.+?) \|$", text, re.M)}
+    gotchas = []
+    if "## Gotchas" in text:
+        section = text.split("## Gotchas", 1)[1].split("\n## ", 1)[0]
+        gotchas = [l[2:].strip() for l in section.splitlines() if l.startswith("- ")]
+    return summary, fields, gotchas
+
+@lru_cache(maxsize=1)
+def build_schema():
+    # Trusted internal SQL, so no authorizer (it would block pragma_table_info)
+    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    tables = {}
+    table_names = [t for (t,) in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+    for table in table_names:
+        summary, docs, gotchas = parse_table_doc(Path("data") / f"{table}.md")
+        columns = []
+        for _, name, col_type, *_ in conn.execute(f'SELECT * FROM pragma_table_info("{table}")').fetchall():
+            col = {"name": name, "type": col_type, "description": docs.get(name, "")}
+            if col_type == "TEXT":
+                values = conn.execute(
+                    f'SELECT "{name}" FROM "{table}" WHERE "{name}" IS NOT NULL '
+                    f'GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT {AI_MAX_ENUM_VALUES + 1}').fetchall()
+                if len(values) <= AI_MAX_ENUM_VALUES:
+                    col["values"] = [v for (v,) in values]
+            columns.append(col)
+        tables[table] = {
+            "description": summary,
+            "row_count": conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0],
+            "columns": columns,
+            "gotchas": gotchas,
+        }
+    conn.close()
+    return {"conventions": AI_CONVENTIONS, "tables": tables}
+
+@app.get("/api/ai/schema")
+def ai_schema():
+    """Everything the assistant needs to write SQL: tables, columns, types,
+    descriptions, low-cardinality values, gotchas and storage conventions."""
+    return build_schema()
+
+class AIQuery(BaseModel):
+    sql: str = Field(..., description="One SQLite SELECT statement. Use ? placeholders for values.")
+    params: list = Field(default_factory=list, description="Values bound to ? placeholders, in order.")
+    limit: int = Field(AI_DEFAULT_LIMIT, ge=1, le=AI_MAX_LIMIT, description="Maximum rows returned.")
+
+@app.post("/api/ai/query")
+def ai_query(req: AIQuery):
+    """Run one read-only SQL query. Errors come back as 400 with SQLite's message
+    so the assistant can fix its SQL and retry."""
+    conn = connect_readonly()
+    deadline = time.monotonic() + AI_TIMEOUT_SECONDS
+    conn.set_progress_handler(lambda: time.monotonic() > deadline, 10_000)
+    try:
+        cur = conn.execute(req.sql, req.params)
+        if cur.description is None:
+            raise HTTPException(400, "Query returned no result set; only SELECT statements are supported.")
+        columns = [d[0] for d in cur.description]
+        rows = cur.fetchmany(req.limit + 1)
+    except sqlite3.Error as e:
+        msg = str(e)
+        if msg == "interrupted":
+            msg = f"Query exceeded {AI_TIMEOUT_SECONDS}s time limit; add filters or aggregate instead."
+        elif "not authorized" in msg:
+            msg = "Only read-only SELECT queries are allowed."
+        raise HTTPException(400, msg)
+    finally:
+        conn.close()
+
+    truncated = len(rows) > req.limit
+    rows = rows[:req.limit]
+    return {
+        "columns": columns,
+        "rows": [dict(zip(columns, r)) for r in rows],
+        "row_count": len(rows),
+        "truncated": truncated,
+    }
