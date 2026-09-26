@@ -3,6 +3,8 @@ import PathIcon from "./PathIcon";
 import SalaryByYearChart from "./SalaryByYearChart";
 import InternshipChart from "./InternshipChart";
 import CourseMap from "./CourseMap";
+import QuickInformation from "./QuickInformation";
+import AiQuery from "./AiQuery";
 import "./PathPage.css";
 
 interface Props {
@@ -32,6 +34,8 @@ export default function PathPage({ pathId, onChangePath }: Props) {
           and for "both" render CS and InfoTech side by side */}
       <main className="path-page__content">
         <h1>What would you like to know?</h1>
+        <QuickInformation majors={path.majors} />
+        <AiQuery />
         <CourseMap />
         <SalaryByYearChart />
         <InternshipChart />

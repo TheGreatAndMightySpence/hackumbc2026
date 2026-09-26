@@ -1,0 +1,50 @@
+[
+  {
+    "id": "cs-vs-is",
+    "question": "What's the difference between Computer Science and Information Systems?",
+    "answer": "Computer Science focuses on building software: programming, algorithms, systems and theory. Information Systems focuses on applying technology inside organizations: databases, analytics, security management and IT strategy. Pick \"Explore both\" to compare them side by side.",
+    "majors": []
+  },
+  {
+    "id": "first-courses",
+    "question": "Which courses should I take first?",
+    "answer": "Start with the courses that have no prerequisites. On the course map they sit in the first column, and everything to their right unlocks as you finish them.",
+    "majors": []
+  },
+  {
+    "id": "read-course-map",
+    "question": "How do I read the course map?",
+    "answer": "Each box is a course and each arrow points from a prerequisite to the course that needs it. Dashed arrows mean \"either of these\" prerequisites will do. Columns show the earliest semester you could take a course if you follow the chain.",
+    "majors": []
+  },
+  {
+    "id": "internships-matter",
+    "question": "Do internships really affect starting salary?",
+    "answer": "The \"Do internships pay off?\" chart groups alumni by how many internships they completed and shows their average first-job salary, so you can see the trend in our own graduates' data.",
+    "majors": []
+  },
+  {
+    "id": "salary-trend",
+    "question": "What do graduates earn in their first job?",
+    "answer": "The salary-by-year chart shows the average first-job salary for each graduating class, so you can see both typical pay and how it has changed over time.",
+    "majors": []
+  },
+  {
+    "id": "cs-math",
+    "question": "How much math does Computer Science require?",
+    "answer": "Computer Science includes required math courses alongside programming. Look for the math courses marked Core on the Computer Science course map to see exactly which ones and when they fit.",
+    "majors": ["Computer Science"]
+  },
+  {
+    "id": "is-programming",
+    "question": "Will I still program in Information Systems?",
+    "answer": "Yes, but the focus is on using code and data to solve business problems rather than on building systems from scratch. The Information Systems course map shows the programming and database courses involved.",
+    "majors": ["Information Systems"]
+  },
+  {
+    "id": "electives",
+    "question": "Can I see electives on the course map?",
+    "answer": "Yes. The course map can include your major's electives along with the required courses, so you can plan which ones fit after your core classes.",
+    "majors": []
+  }
+]

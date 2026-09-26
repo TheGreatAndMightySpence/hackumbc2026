@@ -1,3 +1,5 @@
+import json
+import os
 import re
 import sqlite3
 import time
@@ -5,6 +7,12 @@ from functools import lru_cache
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+
+load_dotenv()
+api_key = os.getenv("MY_API_KEY")
+if not api_key:
+    raise ValueError("API Key not found. Please check your .env file.")
 
 MAJOR_SUBJECT = {"Computer Science": "CMSC", "Information Systems": "IS"}
 
@@ -112,6 +120,21 @@ def course_map(major: str, electives: bool = False):
     } for cid in sorted(chosen)]
 
     return {"nodes": nodes, "edges": edges}
+
+
+
+# FAQ api
+#   Questions live in faq.json so they can be edited without touching code.
+#   An empty "majors" list means the question applies to every major.
+
+FAQ_PATH = Path("faq.json")
+
+@app.get("/api/faq")
+def faq(major: str | None = None):
+    items = json.loads(FAQ_PATH.read_text(encoding="utf-8"))
+    if major:
+        items = [q for q in items if not q["majors"] or major in q["majors"]]
+    return items
 
 
 

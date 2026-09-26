@@ -1,0 +1,52 @@
+.quick-info__list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.quick-info__item + .quick-info__item {
+  border-top: 1px solid var(--border);
+}
+
+.quick-info__item summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  font-weight: 600;
+  color: var(--text-h);
+  cursor: pointer;
+  list-style: none;
+}
+
+.quick-info__item summary::-webkit-details-marker {
+  display: none;
+}
+
+.quick-info__item summary::after {
+  content: "+";
+  flex-shrink: 0;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--card, var(--accent));
+}
+
+.quick-info__item[open] summary::after {
+  content: "−";
+}
+
+.quick-info__item summary:hover {
+  color: var(--card, var(--accent));
+}
+
+.quick-info__item summary:focus-visible {
+  outline: 3px solid var(--card, var(--accent));
+  outline-offset: -3px;
+}
+
+.quick-info__item p {
+  padding: 0 16px 16px;
+}

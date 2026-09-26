@@ -36,3 +36,10 @@ export interface CourseMapData {
   nodes: CourseNodeInfo[];
   edges: PrereqEdge[];
 }
+
+export interface FaqItem {
+  id: string;
+  question: string;
+  answer: string;
+  majors: string[]; // empty = applies to every major
+}
