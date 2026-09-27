@@ -201,6 +201,23 @@ export function needsPermission(results: Results): string[] {
   return [...fails].filter(([, n]) => n >= PERMISSION_ATTEMPT - 1).map(([id]) => id);
 }
 
+// The transcripts' 4.0 scale, matching /api/plan/progress
+const GRADE_POINTS: Record<Grade, number> = { A: 4, B: 3, C: 2, D: 1 };
+
+// GPA over the attempts in `keys`, the same way the API totals it: every graded attempt counts
+// (a fail as an F), transfers and planned courses don't. null if nothing is graded yet.
+export function gpaOf(keys: string[], results: Results, creditsOf: (key: string) => number): number | null {
+  let points = 0;
+  let graded = 0;
+  for (const key of keys) {
+    const r = results[key];
+    if (!r || r.status === "transferred") continue;
+    graded += creditsOf(key);
+    points += creditsOf(key) * (r.status === "passed" ? GRADE_POINTS[r.grade] : 0);
+  }
+  return graded ? points / graded : null;
+}
+
 // What the API takes: one entry per attempt with a result
 export const resultList = (results: Results) =>
   Object.entries(results).map(([key, r]) => ({ course_id: courseOf(key), attempt: attemptOf(key), ...r }));

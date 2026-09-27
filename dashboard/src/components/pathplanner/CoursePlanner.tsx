@@ -15,6 +15,7 @@ import {
 import PlanProgress from "./PlanProgress";
 import CourseDetails, { Difficulty } from "./CourseDetails";
 import PlanAdvisor from "./PlanAdvisor";
+import PlanExport from "./PlanExport";
 import "./CoursePlanner.css";
 
 interface Props {
@@ -586,6 +587,15 @@ export default function CoursePlanner({ major }: Props) {
         <button type="button" className="planner__add" onClick={addSemester}>
           + Add semester
         </button>
+
+        {/* ---------- Export: the plan as a PDF ---------- */}
+        <PlanExport
+          major={major}
+          semesters={semesters}
+          terms={terms.map(termLabel)}
+          results={results}
+          courses={courses}
+        />
 
         {/* TODO: list required courses that still aren't placed */}
       </section>

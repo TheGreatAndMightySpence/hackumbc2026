@@ -893,6 +893,54 @@ def plan_schedule(req: PlanScheduleRequest):
     }
 
 
+# What the student typed in "Ask the advisor"
+#   POST /api/ai/plan-intent {question} -> {action: "schedule" | "advice", preferences}
+#   "schedule" when they ask for their plan to be built or filled in (the planner then calls
+#   /api/ai/plan-schedule with preferences as its note), "advice" for anything else.
+
+PLAN_INTENT_PROMPT = (
+    "A student typed this into the course planner's advisor box. Decide what they want.\n"
+    '- "schedule": they want the planner to build, fill in, generate or redo their semester schedule '
+    '(e.g. "make me a schedule", "plan the rest of my semesters, I like AI", "fill in my plan with light semesters").\n'
+    '- "advice": anything else, including questions about the plan they already have '
+    '(e.g. "is semester 3 too hard?", "what should I take next?", "is my schedule balanced?").\n'
+    'preferences: for "schedule", what they want from it (interests, workload, timing), rewritten as a short '
+    'note, or "" if they gave none. For "advice", "".'
+)
+PLAN_INTENT_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "action": {"type": "STRING", "enum": ["schedule", "advice"]},
+        "preferences": {"type": "STRING"},
+    },
+    "required": ["action", "preferences"],
+}
+
+class PlanIntentRequest(BaseModel):
+    question: str = Field(..., max_length=1000)
+
+@app.post("/api/ai/plan-intent")
+def plan_intent(req: PlanIntentRequest):
+    try:
+        result = gemini.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=req.question,
+            config=types.GenerateContentConfig(
+                system_instruction=PLAN_INTENT_PROMPT,
+                response_mime_type="application/json",
+                response_schema=PLAN_INTENT_SCHEMA,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            ),
+        )
+        data = json.loads(result.text)
+    except Exception as e:
+        print(f"Gemini intent request failed, treating it as a question: {e}")
+        data = {}
+    if data.get("action") != "schedule":
+        return {"action": "advice", "preferences": ""}
+    return {"action": "schedule", "preferences": str(data.get("preferences", "")).strip()}
+
+
 # Most asked questions
 #   GET /api/top-questions/{major} -> the 10 most asked past questions for 'cs', 'info' or 'both'
 

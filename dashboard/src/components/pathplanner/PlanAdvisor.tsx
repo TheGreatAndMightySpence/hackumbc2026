@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { PlanAdviceResponse, PlanScheduleResponse } from "../../types";
+import type { PlanAdviceResponse, PlanIntentResponse, PlanScheduleResponse } from "../../types";
 import MarkdownText from "../MarkdownText";
 import { courseOf, parseTerm, resultList, type Results, type Semesters, type Term } from "./planLogic";
 import "./PlanAdvisor.css";
@@ -39,6 +39,22 @@ export default function PlanAdvisor({ major, semesters, terms, results, onSchedu
     return (await res.json()) as T;
   }
 
+  // A typed question can also ask for a recommended schedule; the AI decides which it is
+  async function askOrRecommend(q: string) {
+    setAsked(`You asked: "${q}"`);
+    setAnswer(null);
+    setError(null);
+    setLoading("advice");
+    let intent: PlanIntentResponse = { action: "advice", preferences: "" };
+    try {
+      intent = await post<PlanIntentResponse>("/api/ai/plan-intent", { question: q });
+    } catch {
+      // Couldn't tell; answer it as a question
+    }
+    if (intent.action === "schedule") recommend(intent.preferences, `You asked: "${q}"`);
+    else ask(q);
+  }
+
   async function ask(q: string) {
     setAsked(q ? `You asked: "${q}"` : null);
     setAnswer(null);
@@ -55,8 +71,8 @@ export default function PlanAdvisor({ major, semesters, terms, results, onSchedu
     }
   }
 
-  async function recommend(note: string) {
-    setAsked(note ? `Recommended schedule for: "${note}"` : "Recommended schedule");
+  async function recommend(note: string, heading?: string) {
+    setAsked(heading ?? (note ? `Recommended schedule for: "${note}"` : "Recommended schedule"));
     setAnswer(null);
     setError(null);
     setLoading("schedule");
@@ -102,8 +118,8 @@ export default function PlanAdvisor({ major, semesters, terms, results, onSchedu
         </div>
       </div>
       <p className="plan-advisor__hint">
-        The advisor sees the courses you've put in each semester. Ask about your plan, or get a quick review.
-        For a recommended schedule, type your preferences first (e.g. "I'm into AI, keep semesters light").
+        The advisor sees the courses you've put in each semester. Ask about your plan, get a quick review, or
+        ask it to make you a schedule (e.g. "Make me a schedule, I'm into AI and want light semesters").
       </p>
       <form
         className="plan-advisor__form"
@@ -112,7 +128,7 @@ export default function PlanAdvisor({ major, semesters, terms, results, onSchedu
           const trimmed = question.trim();
           if (!trimmed || loading) return;
           setQuestion("");
-          ask(trimmed);
+          askOrRecommend(trimmed);
         }}
       >
         <input

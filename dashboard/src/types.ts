@@ -82,6 +82,12 @@ export interface PlanAdviceResponse {
   answer: string;
 }
 
+// POST /api/ai/plan-intent: whether a typed question asks for advice or for a recommended schedule
+export interface PlanIntentResponse {
+  action: "advice" | "schedule";
+  preferences: string; // for "schedule", the student's preferences as a short note
+}
+
 // POST /api/ai/plan-schedule: the student's plan with the rest of their courses added
 export interface PlanScheduleResponse {
   semesters: string[][]; // attempt keys ("CMSC201", "CMSC201#2" for a retake), first to last
