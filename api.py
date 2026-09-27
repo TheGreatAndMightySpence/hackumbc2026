@@ -439,6 +439,75 @@ def ai_ask(req: AskRequest):
     return {"answer": answer, "charts": charts, "cached": False}
 
 
+# Plan advice via Gemini
+#   POST /api/ai/plan-advice {major, semesters, question} -> {answer}
+#   semesters is the planner's course ids per semester, first to last. The server looks each one
+#   up in the catalog, so Gemini sees titles, credits, difficulty, prerequisites and terms offered.
+#   No semantic cache: every plan is different, so past answers rarely apply.
+
+PLAN_MAX_SEMESTERS = 16
+PLAN_DEFAULT_QUESTION = ("Review my plan. Is the workload balanced across semesters, are any semesters "
+                         "too heavy, and what required courses am I still missing?")
+
+class PlanAdviceRequest(BaseModel):
+    major: Literal["Computer Science", "Information Systems"]
+    semesters: list[list[str]] = Field(..., max_length=PLAN_MAX_SEMESTERS,
+                                       description="Course ids in each semester, first to last.")
+    question: str = Field("", max_length=1000, description="Empty asks for a general review.")
+
+@app.post("/api/ai/plan-advice")
+def plan_advice(req: PlanAdviceRequest):
+    catalog = {c["course_id"]: c for c in query("SELECT * FROM course_catalog")}
+    unknown = [cid for ids in req.semesters for cid in ids if cid not in catalog]
+    if unknown:
+        raise HTTPException(400, f"Unknown courses: {unknown}")
+
+    plan = [{
+        "semester": i + 1,
+        "credits": sum(catalog[cid]["credits"] for cid in ids),
+        "courses": [{
+            "id": cid,
+            "title": catalog[cid]["course_title"],
+            "credits": catalog[cid]["credits"],
+            "type": catalog[cid]["course_type"],
+            "difficulty": catalog[cid]["difficulty_index"],
+            "prerequisites": split_list(catalog[cid]["prerequisite_ids"]),
+            "terms": split_list(catalog[cid]["typical_terms_offered"]),
+        } for cid in ids],
+    } for i, ids in enumerate(req.semesters)]
+
+    placed = {cid for ids in req.semesters for cid in ids}
+    missing_required = sorted(cid for cid, c in catalog.items()
+                              if req.major in split_list(c["required_for_majors"]) and cid not in placed)
+
+    system = (
+        f"You are an academic advisor helping a UMBC {req.major} student plan their semesters. "
+        "Below is the student's current plan: each semester's courses with credits, difficulty "
+        "(1.0 gentle to 5.0 demanding), prerequisites and the terms each course is usually offered. "
+        "A full-time load is about 15 credits; more than 19 needs an overload approval. "
+        "Semester 1 is the student's first semester; assume semesters alternate Fall, Spring starting "
+        "with Fall unless the student says otherwise.\n\n"
+        "Base your advice on the plan. Point out semesters that are too heavy or too light, hard "
+        "courses stacked together, courses placed in a term they aren't usually offered, and required "
+        "courses that aren't in the plan yet. Suggest concrete moves (which course to which semester). "
+        "Use the run_sql tool when past student outcomes would help (e.g. pass rates or average grades "
+        "for a course from transcripts). Answer in short paragraphs or a bulleted list; don't show SQL. "
+        "Never reveal student IDs (campus_id) or anything identifying an individual student.\n\n"
+        "Current plan:\n" + json.dumps(plan) + "\n\n"
+        f"Required {req.major} courses not in the plan yet: " + json.dumps(missing_required) + "\n\n"
+        "Database schema:\n" + json.dumps(build_schema())
+    )
+    try:
+        chat = gemini.chats.create(
+            model=GEMINI_MODEL,
+            config=types.GenerateContentConfig(system_instruction=system, tools=[run_sql]),
+        )
+        response = chat.send_message(req.question.strip() or PLAN_DEFAULT_QUESTION)
+    except Exception as e:
+        raise HTTPException(502, f"Gemini request failed: {e}")
+    return {"answer": redact_ids(response.text or "Sorry, I couldn't come up with any advice.")}
+
+
 # Most asked questions
 #   GET /api/top-questions/{major} -> the 10 most asked past questions for 'cs', 'info' or 'both'
 

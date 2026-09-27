@@ -77,6 +77,11 @@ export interface AskResponse {
   cached: boolean;
 }
 
+// POST /api/ai/plan-advice: the AI's advice on the student's semester plan
+export interface PlanAdviceResponse {
+  answer: string;
+}
+
 export interface TopQuestion {
   id: number;
   question: string; // as the student typed it

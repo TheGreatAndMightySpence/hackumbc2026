@@ -10,6 +10,7 @@ import {
   canPlace, levelOf, missingPrereqs, moveCourse, prereqsMet, settle, type Semesters,
 } from "./planLogic";
 import CourseDetails, { Difficulty } from "./CourseDetails";
+import PlanAdvisor from "./PlanAdvisor";
 import "./CoursePlanner.css";
 
 interface Props {
@@ -220,6 +221,9 @@ export default function CoursePlanner({ major }: Props) {
   return (
     <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragging(null)}>
       <section className="planner">
+        {/* ---------- AI advisor: sees the plan as it stands ---------- */}
+        <PlanAdvisor major={major} semesters={semesters} />
+
         {/* ---------- Pool: unlocked courses, by level ---------- */}
         <div className="planner__summary">
           <h2>Pick your courses</h2>
