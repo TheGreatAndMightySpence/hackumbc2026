@@ -7,8 +7,8 @@ import {
 import { useApi } from "../../api";
 import type { CourseMapData, CourseNodeInfo } from "../../types";
 import {
-  afterPreviousAttempt, attemptName, attemptOf, canPlace, chronological, courseOf, firstTerm, levelOf,
-  missingPrereqs, moveCourse, needsPermission, nextResult, nextTerm, offeredIn, pendingRetakes, PERMISSION_ATTEMPT,
+  afterPreviousAttempt, attemptName, attemptOf, canPlace, chronological, clearFutureResults, courseOf, firstTerm,
+  isFuture, levelOf, missingPrereqs, moveCourse, needsPermission, nextResult, nextTerm, offeredIn, pendingRetakes, PERMISSION_ATTEMPT,
   prereqsMet, pruneAttempts, resultLabel, SEASONS, settle, termLabel,
   type CourseResult, type Results, type Season, type Semesters, type Term,
 } from "./planLogic";
@@ -71,9 +71,10 @@ interface CardProps {
   onShowMore?: () => void; // only on expanded cards
   result?: CourseResult; // placed courses: what happened in it, if anything yet
   onCycleResult?: () => void; // placed courses: step to the next result
+  future?: boolean; // placed courses: in a term that hasn't started, so no grade yet
 }
 
-function CourseCard({ attemptKey, course, onRemove, onShowMore, result, onCycleResult }: CardProps) {
+function CourseCard({ attemptKey, course, onRemove, onShowMore, result, onCycleResult, future }: CardProps) {
   const { setNodeRef, listeners, attributes, isDragging } = useDraggable({ id: attemptKey });
   const expanded = onShowMore !== undefined;
   const attempt = attemptOf(attemptKey);
@@ -97,7 +98,9 @@ function CourseCard({ attemptKey, course, onRemove, onShowMore, result, onCycleR
           type="button"
           className={`planner__result planner__result--${result?.status ?? "planned"}`}
           aria-label={`${course.id}: ${resultLabel(result)}. Change result`}
-          title="Click to change: Planned, Passed (A–D), Transferred, Failed"
+          title={future
+            ? "Click to change: Planned, Transferred (grades open once the semester starts)"
+            : "Click to change: Planned, Passed (A–D), Transferred, Failed"}
           onClick={onCycleResult}
         >
           {resultLabel(result)}
@@ -210,6 +213,8 @@ export default function CoursePlanner({ major }: Props) {
   const [filter, setFilter] = useState<PoolFilter>("unlocked");
   const [detailsFor, setDetailsFor] = useState<string | null>(null); // course id in the popup
   const [results, setResults] = useState<Results>({}); // placed course id -> passed / transferred / failed
+  // The plan from before the AI's recommended schedule went in, until the student changes anything else
+  const [undo, setUndo] = useState<{ semesters: Semesters; terms: PlanTerm[]; results: Results } | null>(null);
 
   // Mouse: drag after moving 5px, so clicks still work.
   // Touch: press and hold, so a normal swipe still scrolls the page.
@@ -279,22 +284,27 @@ export default function CoursePlanner({ major }: Props) {
   // Every change goes through here so semesters stay in term order, and courses that
   // lost a prereq (say, their semester's term moved earlier) or whose semester moved to a
   // season they aren't offered in fall back to the pool. A course back in the pool loses its
-  // result, and a retake disappears once the attempt before it is no longer failed.
+  // result, a course in a future term loses any grade or fail, and a retake disappears once
+  // the attempt before it is no longer failed.
   const apply = (next: Semesters, nextTerms: PlanTerm[] = terms, nextResults: Results = results) => {
     const order = chronological(nextTerms);
     const sortedTerms = order.map(i => nextTerms[i]);
     const settled = settle(order.map(i => next[i]), sortedTerms, data);
-    const pruned = pruneAttempts(settled.semesters, nextResults);
+    const future = clearFutureResults(settled.semesters, sortedTerms, nextResults);
+    const pruned = pruneAttempts(settled.semesters, future.results);
     setSemesters(pruned.semesters);
     setTerms(sortedTerms);
     setResults(pruned.results);
+    setUndo(null);
 
     // Don't report a retake as back in the pool if it's gone altogether
     const pending = new Set(pendingRetakes(pruned.semesters, pruned.results));
     const inPool = (keys: string[]) => keys.filter(k => attemptOf(k) === 1 || pending.has(k)).map(attemptName);
     const [unoffered, bumped, early] = [inPool(settled.unoffered), inPool(settled.bumped), inPool(settled.early)];
     const dropped = pruned.dropped.map(attemptName);
+    const cleared = future.cleared.filter(k => pruned.semesters.some(keys => keys.includes(k))).map(attemptName);
     const notices = [
+      cleared.length && `${cleared.join(", ")} went back to Planned because ${cleared.length > 1 ? "their semesters haven't" : "its semester hasn't"} started yet.`,
       unoffered.length && `${unoffered.join(", ")} went back to the pool because ${unoffered.length > 1 ? "they aren't" : "it isn't"} offered in that semester's season.`,
       bumped.length && `${bumped.join(", ")} went back to the pool because a prerequisite is no longer in an earlier semester.`,
       early.length && `${early.join(", ")} went back to the pool because a retake has to come after the semester it was failed in.`,
@@ -310,12 +320,31 @@ export default function CoursePlanner({ major }: Props) {
     setNextKey(k => k + 1);
   };
 
-  // Planned -> Passed A..D -> Transferred -> Failed -> Planned.
-  // Goes through apply, since marking a course failed adds a retake and un-failing it removes one.
-  const cycleResult = (key: string) => {
+  // Planned -> Passed A..D -> Transferred -> Failed -> Planned, or just Planned <-> Transferred
+  // in a future semester. Goes through apply, since marking a course failed adds a retake
+  // and un-failing it removes one.
+  const cycleResult = (key: string, future: boolean) => {
     const { [key]: current, ...rest } = results;
-    const next = nextResult(current);
+    const next = nextResult(current, future);
     apply(semesters, terms, next ? { ...rest, [key]: next } : rest);
+  };
+
+  // The AI's recommended schedule: the current semesters, in order, with courses added, then new
+  // semesters. Current semesters keep their keys; new ones get fresh keys.
+  const applySchedule = (next: Semesters, nextTerms: Term[]) => {
+    const before = { semesters, terms, results };
+    apply(next, nextTerms.map((t, i) => ({ ...t, key: terms[i]?.key ?? nextKey + i })));
+    setNextKey(k => k + nextTerms.length);
+    setUndo(before); // after apply, which clears it
+  };
+
+  const undoSchedule = () => {
+    if (!undo) return;
+    setSemesters(undo.semesters);
+    setTerms(undo.terms);
+    setResults(undo.results);
+    setUndo(null);
+    setNotice(null);
   };
 
   const changeTerm = (index: number, term: Term) =>
@@ -350,7 +379,14 @@ export default function CoursePlanner({ major }: Props) {
     <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragging(null)}>
       <section className="planner">
         {/* ---------- AI advisor: sees the plan as it stands ---------- */}
-        <PlanAdvisor major={major} semesters={semesters} terms={terms.map(termLabel)} results={results} />
+        <PlanAdvisor
+          major={major}
+          semesters={semesters}
+          terms={terms.map(termLabel)}
+          results={results}
+          onSchedule={applySchedule}
+          onUndo={undo ? undoSchedule : undefined}
+        />
 
         {/* ---------- Pool: unlocked courses, by level ---------- */}
         <div className="planner__summary">
@@ -527,7 +563,8 @@ export default function CoursePlanner({ major }: Props) {
                       course={courseFor(key)!}
                       onRemove={() => apply(moveCourse(semesters, key, null))}
                       result={results[key]}
-                      onCycleResult={() => cycleResult(key)}
+                      onCycleResult={() => cycleResult(key, isFuture(term))}
+                      future={isFuture(term)}
                     />
                   ))}
                   {ids.length === 0 && <p className="planner__muted">Drag courses here</p>}

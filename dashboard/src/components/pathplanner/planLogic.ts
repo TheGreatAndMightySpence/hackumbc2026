@@ -28,6 +28,14 @@ export interface Term {
 }
 
 export const termLabel = (t: Term) => `${t.season} ${t.year}`;
+
+// "Fall 2027" -> { season: "Fall", year: 2027 }; null if it isn't a term
+export function parseTerm(label: string): Term | null {
+  const [season, year] = label.trim().split(/\s+/);
+  return SEASONS.includes(season as Season) && /^\d{4}$/.test(year ?? "")
+    ? { season: season as Season, year: Number(year) }
+    : null;
+}
 const termOrder = (t: Term) => t.year * SEASONS.length + SEASONS.indexOf(t.season);
 
 // The term to plan first: the coming Fall until August, then the coming Spring
@@ -36,6 +44,12 @@ export function firstTerm(today = new Date()): Term {
     ? { season: "Fall", year: today.getFullYear() }
     : { season: "Spring", year: today.getFullYear() + 1 };
 }
+
+// Month each season starts (0 = January), matching firstTerm's "Fall starts in August"
+const SEASON_START: Record<Season, number> = { Spring: 0, Summer: 5, Fall: 7 };
+
+// Has `t` not started yet? Courses in a future term can't have a grade yet
+export const isFuture = (t: Term, today = new Date()) => new Date(t.year, SEASON_START[t.season], 1) > today;
 
 // The regular term after `t`, skipping Summer: Fall -> Spring -> Fall
 export const nextTerm = (t: Term): Term =>
@@ -121,9 +135,31 @@ const RESULT_CYCLE: (CourseResult | null)[] = [
 export const resultLabel = (r: CourseResult | undefined) =>
   !r ? "Planned" : r.status === "passed" ? `Passed · ${r.grade}` : r.status === "transferred" ? "Transferred" : "Failed";
 
-export function nextResult(current: CourseResult | undefined): CourseResult | null {
-  const index = RESULT_CYCLE.findIndex(r => resultLabel(r ?? undefined) === resultLabel(current));
-  return RESULT_CYCLE[(index + 1) % RESULT_CYCLE.length];
+// A course in a future term hasn't been taken yet, so it can only be planned or transferred in
+const FUTURE_CYCLE: (CourseResult | null)[] = [null, { status: "transferred" }];
+
+export function nextResult(current: CourseResult | undefined, future = false): CourseResult | null {
+  const cycle = future ? FUTURE_CYCLE : RESULT_CYCLE;
+  const index = cycle.findIndex(r => resultLabel(r ?? undefined) === resultLabel(current));
+  return cycle[(index + 1) % cycle.length];
+}
+
+// Drop grades and fails from courses sitting in future terms (say, after their semester's
+// term moved later or they were dragged into a later semester); transfers stay.
+// `cleared` lists the attempts that lost their result.
+export function clearFutureResults(semesters: Semesters, terms: Term[], results: Results, today = new Date()) {
+  const kept: Results = { ...results };
+  const cleared: string[] = [];
+  semesters.forEach((keys, index) => {
+    if (!isFuture(terms[index], today)) return;
+    for (const key of keys) {
+      if (kept[key] && kept[key].status !== "transferred") {
+        delete kept[key];
+        cleared.push(key);
+      }
+    }
+  });
+  return { results: kept, cleared };
 }
 
 // Keep results only for attempts still in a semester, and a retake only while the attempt

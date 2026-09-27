@@ -3,6 +3,7 @@ import os
 import re
 import sqlite3
 import time
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -507,19 +508,14 @@ class PlanAdviceRequest(BaseModel):
     results: list[CourseResult] = Field(default_factory=list, description="One entry per attempt with a result.")
     question: str = Field("", max_length=1000, description="Empty asks for a general review.")
 
-@app.post("/api/ai/plan-advice")
-def plan_advice(req: PlanAdviceRequest):
-    catalog = {c["course_id"]: c for c in query("SELECT * FROM course_catalog")}
-    unknown = [cid for ids in req.semesters for cid in ids if cid not in catalog]
-    if unknown:
-        raise HTTPException(400, f"Unknown courses: {unknown}")
-
-    # Semesters run first to last, so the nth time a course shows up is its nth attempt
-    results = {(r.course_id, r.attempt): r for r in req.results}
+def describe_plan(catalog, semesters, terms, results):
+    """The plan as Gemini sees it: each semester's courses looked up in the catalog, with results.
+    Semesters run first to last, so the nth time a course shows up is its nth attempt."""
+    results = {(r.course_id, r.attempt): r for r in results}
     attempts = {}
-    has_terms = len(req.terms) == len(req.semesters)
+    has_terms = len(terms) == len(semesters)
     plan = []
-    for i, ids in enumerate(req.semesters):
+    for i, ids in enumerate(semesters):
         courses = []
         for cid in ids:
             attempts[cid] = attempts.get(cid, 0) + 1
@@ -538,10 +534,21 @@ def plan_advice(req: PlanAdviceRequest):
             })
         plan.append({
             "semester": i + 1,
-            **({"term": req.terms[i]} if has_terms else {}),
+            **({"term": terms[i]} if has_terms else {}),
             "credits": sum(catalog[cid]["credits"] for cid in ids),
             "courses": courses,
         })
+    return plan
+
+@app.post("/api/ai/plan-advice")
+def plan_advice(req: PlanAdviceRequest):
+    catalog = {c["course_id"]: c for c in query("SELECT * FROM course_catalog")}
+    unknown = [cid for ids in req.semesters for cid in ids if cid not in catalog]
+    if unknown:
+        raise HTTPException(400, f"Unknown courses: {unknown}")
+
+    has_terms = len(req.terms) == len(req.semesters)
+    plan = describe_plan(catalog, req.semesters, req.terms, req.results)
 
     # A course counts toward what's required once some attempt at it isn't a fail
     failed = {(r.course_id, r.attempt) for r in req.results if r.status == "failed"}
@@ -586,6 +593,304 @@ def plan_advice(req: PlanAdviceRequest):
     except Exception as e:
         raise HTTPException(502, f"Gemini request failed: {e}")
     return {"answer": redact_ids(response.text or "Sorry, I couldn't come up with any advice.")}
+
+
+# Recommended schedule via Gemini
+#   POST /api/ai/plan-schedule {major, semesters, terms, results, note}
+#     -> {semesters, terms, added, explanation, adjusted, unplaced}
+#   Keeps the student's plan as it is and adds what's left: every required course not in it yet
+#   (a retake if it was failed) and electives up to PLAN_ELECTIVES. New courses go into semesters
+#   that haven't started, then into new Fall/Spring semesters after the last one.
+#   Gemini picks where they go and checks its picks with the submit_schedule tool, which applies
+#   the planner's rules (planLogic.ts): prerequisites in an earlier semester, offered that season,
+#   a retake after the semester it was failed in, and the credit limit. Anything it gets wrong or
+#   leaves out, a simple scheduler fills in, so the answer is always a plan the planner accepts.
+#   semesters comes back as the planner's attempt keys ("CMSC201", "CMSC201#2" for a retake),
+#   terms as "Fall 2027"; added lists the keys that are new. note is the student's preferences.
+
+PLAN_CREDIT_LIMIT = 19  # more needs an overload approval
+PLAN_TARGET_LOAD = 15  # a full-time semester; the fallback scheduler fills up to this
+# Electives the recommended plan includes. The catalog doesn't say how many each major needs.
+PLAN_ELECTIVES = {"Computer Science": 5, "Information Systems": 4}
+PLAN_PERMISSION_ATTEMPT = 3  # failing twice means the next attempt needs permission
+SEASON_START_MONTH = {"Spring": 1, "Summer": 6, "Fall": 8}  # as in planLogic.ts
+PLAN_SCHEDULE_DEFAULT_NOTE = "Make me a recommended schedule."
+
+# Terms are (season, year) here and "Fall 2027" in the API
+def parse_term(label):
+    m = re.fullmatch(r"(Spring|Summer|Fall) (\d{4})", label.strip())
+    if not m:
+        raise HTTPException(400, f'Terms look like "Fall 2027", not "{label}".')
+    return m[1], int(m[2])
+
+def term_label(t):
+    return f"{t[0]} {t[1]}"
+
+def first_term(today):
+    """Same as the planner: the coming Fall until August, then the coming Spring."""
+    return ("Fall", today.year) if today.month <= 7 else ("Spring", today.year + 1)
+
+def next_term(t):
+    """The regular term after t, skipping Summer: Fall -> Spring -> Fall."""
+    return ("Spring", t[1] + 1) if t[0] == "Fall" else ("Fall", t[1])
+
+def term_started(t, today):
+    return date(t[1], SEASON_START_MONTH[t[0]], 1) <= today
+
+def attempt_key(cid, attempt):
+    """The planner's key for one attempt: "CMSC201", then "CMSC201#2" for the first retake."""
+    return cid if attempt == 1 else f"{cid}#{attempt}"
+
+class ScheduleRules:
+    """Everything fixed while scheduling one request: the major's courses (the planner's course
+    map, so every course we add is one the planner can show) and the student's plan so far."""
+
+    def __init__(self, req, today):
+        self.major = req.major
+        self.today = today
+        self.catalog = {c["course_id"]: c for c in query("SELECT * FROM course_catalog")}
+        self.courses = {n["id"]: n for n in course_map(req.major, electives=True)["nodes"]}
+        unknown = [cid for ids in req.semesters for cid in ids if cid not in self.courses]
+        if unknown:
+            raise HTTPException(400, f"Not in the {req.major} course list: {unknown}")
+        if len(req.terms) != len(req.semesters):
+            raise HTTPException(400, "Give one term per semester.")
+
+        # Each group is one course or "A or B"; like the planner, only options on the map count
+        self.prereqs = {cid: [[o.strip() for o in g.split(" or ") if o.strip() in self.courses]
+                              for g in split_list(self.catalog[cid]["prerequisite_ids"])]
+                        for cid in self.courses}
+        self.required = [cid for cid in self.courses
+                         if self.major in split_list(self.catalog[cid]["required_for_majors"])]
+        # Electives that unlock early come first when the fallback scheduler picks
+        self.electives = sorted((cid for cid, c in self.courses.items() if c["type"] == "Elective"),
+                                key=lambda cid: (self.courses[cid]["semester"], cid))
+
+        # Length of the longest chain of courses waiting on each one: schedule long chains first
+        dependents = {cid: [d for d in self.courses if any(cid in g for g in self.prereqs[d])]
+                      for cid in self.courses}
+        self.depth = {}
+        def depth(cid):
+            if cid not in self.depth:
+                self.depth[cid] = 1 + max((depth(d) for d in dependents[cid]), default=0)
+            return self.depth[cid]
+        for cid in self.courses:
+            depth(cid)
+
+        # The plan so far: (course id, attempt, failed?) per semester
+        failed = {(r.course_id, r.attempt) for r in req.results if r.status == "failed"}
+        attempts = {}
+        self.semesters = []
+        for ids in req.semesters:
+            semester = []
+            for cid in ids:
+                attempts[cid] = attempts.get(cid, 0) + 1
+                semester.append((cid, attempts[cid], (cid, attempts[cid]) in failed))
+            self.semesters.append(semester)
+        self.terms = [parse_term(t) for t in req.terms]
+        self.passing = {cid for s in self.semesters for cid, _, f in s if not f}  # not failed
+        self.failures = {cid: sum(f for s in self.semesters for c, _, f in s if c == cid)
+                         for cid in {c for s in self.semesters for c, _, _ in s}}
+
+        # New semesters follow the last one, but never in a term that's already begun
+        t = next_term(self.terms[-1]) if self.terms else first_term(today)
+        while term_started(t, today):
+            t = next_term(t)
+        self.new_terms = [t]
+        while len(self.terms) + len(self.new_terms) < PLAN_MAX_SEMESTERS:
+            self.new_terms.append(next_term(self.new_terms[-1]))
+
+    def course_info(self, cid):
+        c = self.courses[cid]
+        return {"id": cid, "title": c["title"], "credits": c["credits"], "difficulty": c["difficulty"],
+                "prerequisites": [" or ".join(g) for g in self.prereqs[cid] if g], "terms": c["terms"]}
+
+def build_schedule(rules, proposal, fill):
+    """Add `proposal` (course ids to add to each semester, semester 1 first) to the student's plan.
+    Additions that break a rule are left out and listed in `skipped`. With fill, a simple scheduler
+    then adds what's still missing, semester by semester up to PLAN_TARGET_LOAD credits: required
+    courses first (longest prerequisite chains first), then electives."""
+    semesters = [list(s) for s in rules.semesters]
+    terms = list(rules.terms)
+    skipped, added = [], []
+
+    def load(i):
+        return sum(rules.courses[c]["credits"] for c, _, _ in semesters[i])
+
+    def add(cid, i):
+        """Put cid in semester i if the rules allow; otherwise return why not."""
+        while len(semesters) <= i:  # a new semester
+            terms.append(rules.new_terms[len(semesters) - len(rules.semesters)])
+            semesters.append([])
+        where = f"{cid} in semester {i + 1} ({term_label(terms[i])})"
+        if cid not in rules.courses:
+            return f"{cid} isn't in the {rules.major} course list."
+        earlier = [j for j, s in enumerate(semesters) for c, _, f in s if c == cid]
+        if any(not f for s in semesters for c, _, f in s if c == cid):
+            return f"{cid} is already in the plan."
+        if term_started(terms[i], rules.today):
+            return f"{where}: that semester has already started; only add to semesters that haven't."
+        course = rules.courses[cid]
+        if course["terms"] and terms[i][0] not in course["terms"]:
+            return f"{where}: it's only offered in {', '.join(course['terms'])}."
+        done = {c for s in semesters[:i] for c, _, f in s if not f}
+        missing = [" or ".join(g) for g in rules.prereqs[cid] if g and not any(o in done for o in g)]
+        if missing:
+            return f"{where}: needs {', '.join(missing)} in an earlier semester."
+        if earlier and max(earlier) >= i:
+            return f"{where}: a retake has to come after the semester it was failed in."
+        if load(i) + course["credits"] > PLAN_CREDIT_LIMIT:
+            return (f"{where}: that semester would have {load(i) + course['credits']} credits; "
+                    f"the limit is {PLAN_CREDIT_LIMIT}.")
+        semesters[i].append((cid, len(earlier) + 1, False))
+        added.append(attempt_key(cid, len(earlier) + 1))
+        return None
+
+    def still_missing():
+        have = {c for s in semesters for c, _, f in s if not f}
+        required = sorted((c for c in rules.required if c not in have), key=lambda c: (-rules.depth[c], c))
+        return required, max(0, PLAN_ELECTIVES[rules.major] - sum(c in have for c in rules.electives))
+
+    def fits(cid, i):  # under a full load, or the first course in an empty semester
+        return i >= len(semesters) or not semesters[i] or load(i) + rules.courses[cid]["credits"] <= PLAN_TARGET_LOAD
+
+    if len(proposal) > PLAN_MAX_SEMESTERS:
+        skipped.append(f"The plan can have at most {PLAN_MAX_SEMESTERS} semesters.")
+    for i, ids in enumerate(proposal[:PLAN_MAX_SEMESTERS]):
+        for cid in ids:
+            # Tolerate "cmsc 341" and retake keys like "CMSC201#2"
+            problem = add(re.sub(r"\s+", "", cid).upper().split("#")[0], i)
+            if problem:
+                skipped.append(problem)
+
+    proposed = len(added)
+    if fill:
+        for i in range(PLAN_MAX_SEMESTERS):
+            required, electives = still_missing()
+            if not required and not electives:
+                break
+            for cid in required:
+                if fits(cid, i):
+                    add(cid, i)
+            for cid in rules.electives:
+                if electives and fits(cid, i) and add(cid, i) is None:
+                    electives -= 1
+
+    # New semesters nothing landed in don't need to be in the plan
+    while len(semesters) > len(rules.semesters) and not semesters[-1]:
+        semesters.pop()
+        terms.pop()
+
+    required, electives = still_missing()
+    return {
+        "semesters": [[attempt_key(c, a) for c, a, _ in s] for s in semesters],
+        "terms": [term_label(t) for t in terms],
+        "added": added,
+        "skipped": skipped,
+        "filled": added[proposed:],  # what the fallback scheduler added
+        "unplaced": required,
+        "electives_missing": electives,
+    }
+
+class PlanScheduleRequest(BaseModel):
+    major: Literal["Computer Science", "Information Systems"]
+    semesters: list[list[str]] = Field(..., max_length=PLAN_MAX_SEMESTERS,
+                                       description="Course ids in each semester, first to last.")
+    terms: list[str] = Field(..., max_length=PLAN_MAX_SEMESTERS,
+                             description='Each semester\'s term, e.g. "Fall 2027".')
+    results: list[CourseResult] = Field(default_factory=list, description="One entry per attempt with a result.")
+    note: str = Field("", max_length=1000, description="The student's preferences, e.g. 'I like AI, keep it light'.")
+
+@app.post("/api/ai/plan-schedule")
+def plan_schedule(req: PlanScheduleRequest):
+    rules = ScheduleRules(req, date.today())
+    start = build_schedule(rules, [], fill=False)  # the plan as it is
+    if not start["unplaced"] and not start["electives_missing"]:
+        return {"semesters": start["semesters"], "terms": start["terms"], "added": [], "adjusted": False,
+                "unplaced": [], "explanation": "Your plan already has every required course and enough "
+                                               "electives, so there's nothing to add."}
+
+    plan = describe_plan(rules.catalog, req.semesters, req.terms, req.results)
+    for semester, t in zip(plan, rules.terms):
+        semester["can_add_courses"] = not term_started(t, rules.today)
+    must_add = []
+    for cid in start["unplaced"]:
+        fails = rules.failures.get(cid, 0)
+        must_add.append({**rules.course_info(cid),
+                         **({"retake": True} if fails else {}),
+                         **({"needs_permission": True} if fails + 1 >= PLAN_PERMISSION_ATTEMPT else {})})
+    elective_options = [rules.course_info(cid) for cid in rules.electives if cid not in rules.passing]
+    new_semesters = [{"semester": len(rules.terms) + i + 1, "term": term_label(t)}
+                     for i, t in enumerate(rules.new_terms)]
+
+    submitted = []  # every schedule Gemini submits; the last one is its answer
+    def submit_schedule(semesters: list[list[str]]) -> dict:
+        """Check a schedule. semesters lists the course ids to ADD to each semester, semester 1
+        first: one list per semester, counting the student's current semesters, so pass [] for
+        semesters you add nothing to. Lists past the current plan are new semesters, with the terms
+        under 'New semesters'. Returns {"ok": true} when the schedule follows every rule, otherwise
+        {"ok": false, "problems": [...]}; fix every problem and submit the whole schedule again."""
+        submitted.append(semesters)
+        result = build_schedule(rules, semesters, fill=False)
+        problems = result["skipped"]
+        if result["unplaced"]:
+            problems.append(f"Still missing required courses: {', '.join(result['unplaced'])}.")
+        if result["electives_missing"]:
+            problems.append(f"Add {result['electives_missing']} more elective(s).")
+        if not problems:
+            return {"ok": True}
+        return {"ok": False, "problems": problems,
+                "credits_per_semester": [sum(rules.courses[k.split("#")[0]]["credits"] for k in s)
+                                         for s in result["semesters"]]}
+
+    have = sum(cid in rules.passing for cid in rules.electives)
+    system = (
+        f"You are an academic advisor building a recommended semester schedule for a UMBC {req.major} "
+        "student. Keep every course already in their plan where it is and add what they still need: "
+        "every course under 'Must add', plus electives from 'Elective options' until the plan has "
+        f"{PLAN_ELECTIVES[req.major]} electives (it has {have} now). Only add more electives if the "
+        "student asks. Pick electives that fit what the student says they're interested in.\n\n"
+        "Rules:\n"
+        "- Only add courses to current semesters marked can_add_courses, and to new semesters after them.\n"
+        "- A course goes in a semester after all its prerequisites (for 'A or B', either one). A failed "
+        "course's retake goes after the semester it was failed in, and courses that need it after the retake.\n"
+        "- A course only goes in a semester whose season is one of its terms.\n"
+        f"- At most {PLAN_CREDIT_LIMIT} credits in a semester. Aim for about {PLAN_TARGET_LOAD}, spread hard "
+        "courses (difficulty 1.0 gentle to 5.0 demanding) so they don't stack up, and finish in as few "
+        "semesters as that allows. Follow the student's preferences where the rules allow.\n\n"
+        "Call submit_schedule with the courses to add. It checks the schedule against these rules; fix "
+        "every problem it lists and submit again until it returns ok. Then explain the schedule to the "
+        "student in a short bulleted list: what went where and why, and anything to watch for (a heavy "
+        "semester, a retake that needs permission). Don't mention the tool or show JSON.\n\n"
+        "Current plan:\n" + json.dumps(plan) + "\n\n"
+        "Must add:\n" + json.dumps(must_add) + "\n\n"
+        "Elective options:\n" + json.dumps(elective_options) + "\n\n"
+        "New semesters:\n" + json.dumps(new_semesters)
+    )
+    explanation = None
+    try:
+        chat = gemini.chats.create(
+            model=GEMINI_MODEL,
+            config=types.GenerateContentConfig(system_instruction=system, tools=[submit_schedule]),
+        )
+        explanation = chat.send_message(req.note.strip() or PLAN_SCHEDULE_DEFAULT_NOTE).text
+    except Exception as e:
+        print(f"Gemini schedule request failed, using the fallback scheduler: {e}")
+
+    # Gemini's last schedule, with any rule-breaking picks dropped and anything missing filled in
+    result = build_schedule(rules, submitted[-1] if submitted else [], fill=True)
+    if not submitted or not explanation:
+        explanation = ("The AI advisor didn't finish this one, so the planner filled in the rest: required "
+                       "courses first, as early as their prerequisites allow, then electives, at about "
+                       f"{PLAN_TARGET_LOAD} credits a semester.")
+    return {
+        "semesters": result["semesters"],
+        "terms": result["terms"],
+        "added": result["added"],
+        "explanation": redact_ids(explanation),
+        "adjusted": bool(submitted) and bool(result["skipped"] or result["filled"]),
+        "unplaced": result["unplaced"],  # required courses that didn't fit in PLAN_MAX_SEMESTERS
+    }
 
 
 # Most asked questions

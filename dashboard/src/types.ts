@@ -82,6 +82,16 @@ export interface PlanAdviceResponse {
   answer: string;
 }
 
+// POST /api/ai/plan-schedule: the student's plan with the rest of their courses added
+export interface PlanScheduleResponse {
+  semesters: string[][]; // attempt keys ("CMSC201", "CMSC201#2" for a retake), first to last
+  terms: string[]; // each semester's term, e.g. "Fall 2027"
+  added: string[]; // the attempt keys the recommendation added
+  explanation: string; // markdown
+  adjusted: boolean; // some of the AI's picks broke a rule, so the planner moved or replaced them
+  unplaced: string[]; // required courses that didn't fit (almost always empty)
+}
+
 // POST /api/plan/progress: the planner's course results, totaled up
 export interface PlanProgressResponse {
   credits_earned: number; // passed + transferred

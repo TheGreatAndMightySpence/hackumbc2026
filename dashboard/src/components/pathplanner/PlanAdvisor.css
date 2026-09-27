@@ -18,8 +18,15 @@
   margin: 0;
 }
 
-.plan-advisor__head button {
+.plan-advisor__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-left: auto;
+}
+
+.plan-advisor__head button,
+.plan-advisor__undo button {
   font: inherit;
   font-size: 14px;
   padding: 6px 14px;
@@ -30,7 +37,8 @@
   cursor: pointer;
 }
 
-.plan-advisor__head button:hover:not(:disabled) {
+.plan-advisor__head button:hover:not(:disabled),
+.plan-advisor__undo button:hover {
   border-color: var(--card, var(--accent));
   color: var(--card, var(--accent));
 }
@@ -119,6 +127,18 @@
   border: 1px solid var(--border);
   border-left: 4px solid var(--card, var(--accent));
   border-radius: 10px;
+}
+
+.plan-advisor__undo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 14px;
+}
+
+.plan-advisor__undo button {
+  padding: 4px 12px;
 }
 
 .plan-advisor__stale {
