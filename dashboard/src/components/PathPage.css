@@ -8,6 +8,7 @@
 .path-page--cs { --card: #2563eb; }
 .path-page--it { --card: #16a34a; }
 .path-page--plan { --card: #d97706; }
+.path-page--explore { --card: #0891b2; }
 
 .path-page__bar {
   display: flex;

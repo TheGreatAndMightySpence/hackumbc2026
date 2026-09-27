@@ -5,9 +5,10 @@ import "./PathPicker.css";
 interface Props {
   onPick: (id: PathId) => void;
   onPlan: () => void;
+  onExplore: () => void;
 }
 
-export default function PathPicker({ onPick, onPlan }: Props) {
+export default function PathPicker({ onPick, onPlan, onExplore }: Props) {
   return (
     <div className="picker">
       <header className="picker__header">
@@ -57,6 +58,30 @@ export default function PathPicker({ onPick, onPlan }: Props) {
         </span>
         <span className="picker__cta">
           Plan <span aria-hidden>→</span>
+        </span>
+      </button>
+
+      <button type="button" className="picker__plan picker__plan--explore" onClick={onExplore}>
+        <span className="picker__icon">
+          {/* bar chart */}
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <line x1="3" y1="21" x2="21" y2="21" />
+            <rect x="5" y="12" width="3" height="9" rx="1" />
+            <rect x="10.5" y="6" width="3" height="15" rx="1" />
+            <rect x="16" y="9" width="3" height="12" rx="1" />
+          </svg>
+        </span>
+        <span className="picker__plan-text">
+          <span className="picker__tagline">Curious about the numbers?</span>
+          <span className="picker__title">Explore the data</span>
+          <span className="picker__desc">
+            Chart graduate, student, job and course data your way: pick the X and Y axes, spot outliers
+            and see the statistics behind them.
+          </span>
+        </span>
+        <span className="picker__cta">
+          Explore <span aria-hidden>→</span>
         </span>
       </button>
     </div>

@@ -947,3 +947,168 @@ def plan_intent(req: PlanIntentRequest):
 @app.get("/api/top-questions/{major}")
 def top_questions(major: Literal["cs", "info", "both"]):
     return redact_ids(past_responses.top_questions(major, limit=10))
+
+
+
+def num(key, label, fmt="number", sql=None):
+    return key, {"label": label, "kind": "number", "format": fmt, "sql": sql or key}
+
+def cat(key, label, sql=None, order=None):
+    return key, {"label": label, "kind": "category", "sql": sql or key, "order": order}
+
+def yes_no(key, label, sql=None):
+    return cat(key, label, f"CASE {sql or key} WHEN 1 THEN 'Yes' WHEN 0 THEN 'No' END", ["Yes", "No"])
+
+# Each course with how students did in it; IP (in progress) has no outcome yet
+COURSE_OUTCOMES = """
+    course_catalog LEFT JOIN (
+        SELECT course_id, COUNT(*) AS attempts,
+               AVG(grade_points) AS avg_grade_points,
+               100.0 * AVG(grade IN ('A','B','C','D')) AS pass_rate,
+               100.0 * AVG(grade = 'W') AS withdraw_rate
+        FROM transcripts WHERE grade != 'IP' GROUP BY course_id
+    ) USING (course_id)
+"""
+
+EXPLORE_DATASETS = {
+    "alumni": {
+        "label": "Graduates", "noun": "graduates", "doc": "alumni",
+        "description": "One row per UMBC CS or IS graduate: grades, involvement, cost and first job.",
+        "from": "alumni", "major": "major",
+        "row_label": "major || ', class of ' || graduation_year",
+        "fields": dict([
+            num("first_job_annual_salary_usd", "First job salary", "dollars"),
+            num("final_gpa", "Final GPA"),
+            num("major_gpa", "Major GPA"),
+            num("internship_count", "Internships"),
+            num("credential_count", "Certifications"),
+            num("engagement_activity_count", "Activities (clubs, research, ...)"),
+            num("graduation_year", "Graduation year", "plain"),
+            num("time_to_degree_years", "Years to degree"),
+            num("total_credits_earned", "Credits earned"),
+            num("work_hours_per_week_while_enrolled", "Work hours per week in school"),
+            num("net_cost_usd", "Net cost of degree", "dollars"),
+            num("total_loans_usd", "Student loans", "dollars"),
+            num("months_to_first_job", "Months to first job"),
+            cat("major", "Major"),
+            cat("track", "Track"),
+            cat("degree_level", "Degree"),
+            cat("entry_type", "Entry type"),
+            cat("residency", "Residency"),
+            cat("first_destination", "After graduation"),
+            cat("first_job_family", "First job field"),
+            cat("first_employer_industry", "First employer industry"),
+            cat("first_job_region", "First job region"),
+            cat("first_job_found_via", "Found first job via"),
+            yes_no("first_job_is_remote", "First job remote"),
+        ]),
+    },
+    "students": {
+        "label": "Current students", "noun": "students", "doc": "students_current",
+        "description": "One row per CS or IS student enrolled in Fall 2026.",
+        "from": "students_current", "major": "major",
+        "row_label": "major || ', ' || class_level",
+        "fields": dict([
+            num("cumulative_gpa", "GPA"),
+            num("major_gpa", "Major GPA"),
+            num("credits_earned", "Credits earned"),
+            num("work_hours_per_week", "Work hours per week"),
+            num("internship_count", "Internships"),
+            num("credential_count", "Certifications"),
+            num("engagement_activity_count", "Activities (clubs, research, ...)"),
+            num("tuition_paid_to_date_usd", "Tuition paid so far", "dollars"),
+            cat("class_level", "Class level", order=["Freshman", "Sophomore", "Junior", "Senior"]),
+            cat("major", "Major"),
+            cat("track", "Track"),
+            cat("entry_type", "Entry type"),
+            cat("residency", "Residency"),
+            cat("enrollment_intensity", "Full or part time"),
+            cat("academic_standing", "Academic standing",
+                order=["Good Standing", "Academic Warning", "Academic Probation"]),
+            cat("minor", "Minor"),
+            yes_no("is_first_generation", "First-generation student"),
+        ]),
+    },
+    "jobs": {
+        "label": "Graduates' jobs", "noun": "jobs", "doc": "employment_history",
+        "description": "One row per job a graduate has held, from their first job to now.",
+        "from": "employment_history e JOIN alumni a USING (campus_id)", "major": "a.major",
+        "row_label": "e.job_title || ' at ' || e.employer",
+        "fields": dict([
+            num("annual_salary_usd", "Salary", "dollars", "e.annual_salary_usd"),
+            num("tenure_months", "Months in the job", sql="e.tenure_months"),
+            num("cost_of_living_index", "Cost of living index", sql="e.cost_of_living_index"),
+            num("start_year", "Start year", "plain", "CAST(substr(e.start_date, 1, 4) AS INTEGER)"),
+            num("graduation_year", "Graduation year", "plain", "a.graduation_year"),
+            cat("major", "Major", "a.major"),
+            cat("job_family", "Job field", "e.job_family"),
+            cat("seniority_level", "Seniority", "e.seniority_level",
+                ["Entry", "Mid", "Senior", "Lead", "Manager", "Director"]),
+            cat("employer_industry", "Industry", "e.employer_industry"),
+            cat("employer_size", "Employer size", "e.employer_size",
+                ["Startup", "Small", "Mid", "Large", "Enterprise"]),
+            cat("region", "Region", "e.region"),
+            cat("change_type", "How they got the job", "e.change_type"),
+            yes_no("is_remote", "Remote", "e.is_remote"),
+            yes_no("requires_clearance", "Needs security clearance", "e.requires_clearance"),
+            yes_no("is_current", "Current job", "e.is_current"),
+        ]),
+    },
+    "courses": {
+        "label": "Courses", "noun": "courses", "doc": "course_catalog",
+        "description": "One row per course in the catalog, with how past students did in it.",
+        "from": COURSE_OUTCOMES, "major": None,
+        "row_label": "course_id || ' ' || course_title",
+        "fields": dict([
+            num("difficulty_index", "Difficulty (1-5)"),
+            num("avg_grade_points", "Average grade (4.0 scale)"),
+            num("pass_rate", "Pass rate", "percent"),
+            num("withdraw_rate", "Withdrawal rate", "percent"),
+            num("attempts", "Students who took it"),
+            num("credits", "Credits"),
+            num("catalog_number", "Course number", "plain"),
+            cat("subject", "Subject"),
+            cat("course_level", "Level", order=["Lower", "Upper"]),
+            cat("course_type", "Type"),
+        ]),
+    },
+}
+
+@app.get("/api/explore/datasets")
+def explore_datasets():
+    out = []
+    for key, ds in EXPLORE_DATASETS.items():
+        _, docs, _ = parse_table_doc(Path("data") / f"{ds['doc']}.md")
+        out.append({
+            "id": key, "label": ds["label"], "noun": ds["noun"], "description": ds["description"],
+            "has_major": ds["major"] is not None,
+            "fields": [{"key": k, "label": f["label"], "kind": f["kind"], "format": f.get("format"),
+                        "order": f.get("order"), "description": docs.get(k, "")}
+                       for k, f in ds["fields"].items()],
+        })
+    return out
+
+@app.get("/api/explore/{dataset}")
+def explore(dataset: str, x: str, y: str | None = None,
+            major: Literal["Computer Science", "Information Systems"] | None = None):
+    ds = EXPLORE_DATASETS.get(dataset)
+    if ds is None:
+        raise HTTPException(404, f"No dataset {dataset}")
+    fields = ds["fields"]
+    unknown = [k for k in (x, y) if k is not None and k not in fields]
+    if unknown:
+        raise HTTPException(400, f"Unknown fields {unknown}; {dataset} has {list(fields)}")
+
+    columns = [f"{fields[x]['sql']} AS x", f"{ds['row_label']} AS label"]
+    if y:
+        columns.append(f"{fields[y]['sql']} AS y")
+    where, params = "", []
+    if major:
+        if ds["major"] is None:
+            raise HTTPException(400, f"{dataset} can't be filtered by major")
+        where, params = f"WHERE {ds['major']} = ?", [major]
+    rows = query(f"""
+        SELECT * FROM (SELECT {', '.join(columns)} FROM {ds['from']} {where})
+        WHERE x IS NOT NULL {'AND y IS NOT NULL' if y else ''}
+    """, params)
+    return {"rows": redact_ids(rows), "count": len(rows)}

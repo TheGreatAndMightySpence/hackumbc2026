@@ -1,0 +1,436 @@
+/* Data explorer. Page chrome comes from PathPage.css; colors follow light/dark mode.
+   Chart colors are the app's first two series hues, checked for colorblind separation
+   and contrast against each mode's background (dark mode uses its own steps). */
+
+.explorer {
+  --viz-data: #2563eb;
+  --viz-outlier: #eb6834;
+}
+
+@media (prefers-color-scheme: dark) {
+  .explorer {
+    --viz-data: #3b82f6;
+    --viz-outlier: #e0602c;
+  }
+}
+
+.explorer__content {
+  gap: 24px;
+}
+
+.explorer__lede {
+  max-width: 680px;
+}
+
+.explorer__label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--card);
+}
+
+.explorer__help {
+  display: block;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.explorer__note {
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+.explorer__error {
+  color: #dc2626;
+}
+
+/* Example questions */
+.explorer__presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.explorer__presets .explorer__label {
+  margin-right: 4px;
+}
+
+.explorer__chip {
+  font: inherit;
+  font-size: 14px;
+  padding: 6px 14px;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.explorer__chip:hover {
+  border-color: var(--card);
+}
+
+.explorer__chip[aria-pressed="true"] {
+  border-color: var(--card);
+  background: color-mix(in srgb, var(--card) 12%, var(--bg));
+}
+
+/* One row of controls above the chart */
+.explorer__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 20px;
+  background: color-mix(in srgb, var(--card) 5%, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.explorer__controls--options {
+  align-items: flex-end;
+  padding: 16px 20px;
+  margin-top: -12px;
+  background: transparent;
+}
+
+.explorer__control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.explorer__controls--options .explorer__control {
+  flex: 0 1 auto;
+}
+
+.explorer__control select {
+  width: 100%;
+  font: inherit;
+  font-size: 15px;
+  padding: 10px 12px;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.explorer__control select:hover:not(:disabled) {
+  border-color: var(--card);
+}
+
+.explorer__control select:focus-visible,
+.explorer__chip:focus-visible,
+.explorer__swap:focus-visible,
+.explorer__segmented button:focus-visible {
+  outline: 3px solid var(--card);
+  outline-offset: 2px;
+}
+
+.explorer__control select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.explorer__swap {
+  align-self: flex-start;
+  margin-top: 26px;
+  width: 40px;
+  height: 42px;
+  font-size: 18px;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.explorer__swap:hover:not(:disabled) {
+  border-color: var(--card);
+  color: var(--card);
+}
+
+.explorer__swap:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.explorer__segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.explorer__segmented button {
+  font: inherit;
+  font-size: 15px;
+  padding: 9px 16px;
+  color: var(--text-h);
+  background: var(--bg);
+  border: none;
+  cursor: pointer;
+}
+
+.explorer__segmented button + button {
+  border-left: 1px solid var(--border);
+}
+
+.explorer__segmented button[aria-pressed="true"] {
+  color: #fff;
+  background: var(--card);
+}
+
+.explorer__segmented button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.explorer__checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-bottom: 10px;
+  font-size: 15px;
+  color: var(--text-h);
+}
+
+.explorer__checks label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.explorer__checks input {
+  accent-color: var(--card);
+}
+
+/* Results */
+.explorer__results {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  transition: opacity 150ms ease;
+}
+
+.explorer__results--stale {
+  opacity: 0.5;
+}
+
+.explorer__card {
+  margin: 0;
+  padding: 20px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.explorer__card h2 {
+  font-size: 20px;
+  margin-bottom: 12px;
+}
+
+.explorer__figure {
+  padding: 20px 12px 16px;
+}
+
+.explorer__figure figcaption {
+  margin: 0 8px 12px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.explorer__caption-note {
+  display: block;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--text);
+}
+
+.explorer__empty {
+  padding: 48px 16px;
+  text-align: center;
+}
+
+.explorer__axis-note {
+  margin-top: 4px;
+  text-align: center;
+  font-size: 13px;
+}
+
+.explorer__tip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 280px;
+  padding: 8px 12px;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.explorer__tip strong {
+  color: var(--text-h);
+}
+
+/* Legend: the colored key carries identity, the text stays in text colors */
+.explorer__legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 20px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.explorer__legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.explorer__key {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+}
+
+.explorer__key--dot {
+  border-radius: 50%;
+  background: var(--viz-data);
+}
+
+.explorer__key--diamond {
+  background: var(--viz-outlier);
+  transform: rotate(45deg) scale(0.9);
+}
+
+.explorer__key--line {
+  width: 20px;
+  height: 2px;
+  background: var(--text-h);
+}
+
+/* Statistics */
+.explorer__stats {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.explorer__tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.explorer__tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.explorer__tile-label {
+  font-size: 14px;
+}
+
+.explorer__tile-value {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-h);
+}
+
+.explorer__tile-note {
+  font-size: 13px;
+}
+
+.explorer__findings {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text-h);
+}
+
+.explorer__equation {
+  margin-top: -12px;
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.explorer__table {
+  max-height: 420px;
+  overflow: auto;
+}
+
+/* Short, fixed-length tables show every row instead of scrolling */
+.explorer__table--full {
+  max-height: none;
+}
+
+.explorer__table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+
+.explorer__table th,
+.explorer__table td {
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.explorer__table th {
+  position: sticky;
+  top: 0;
+  color: var(--text-h);
+  background: var(--bg);
+}
+
+.explorer__table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.explorer__raw summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.explorer__raw[open] summary {
+  margin-bottom: 12px;
+}
+
+@media (max-width: 800px) {
+  .explorer__swap {
+    margin-top: 0;
+    align-self: center;
+    transform: rotate(90deg);
+  }
+  .explorer__controls--options .explorer__control {
+    flex: 1 1 100%;
+  }
+}

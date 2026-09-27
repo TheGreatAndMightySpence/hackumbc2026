@@ -106,6 +106,37 @@ export interface PlanProgressResponse {
   gpa: number | null; // null until a course has a grade (transfer credit doesn't count)
 }
 
+// GET /api/explore/datasets: what the data explorer can chart
+export interface ExploreField {
+  key: string;
+  label: string;
+  kind: "number" | "category";
+  format: "dollars" | "number" | "percent" | "plain" | null; // numbers only; plain has no commas (years)
+  order: string[] | null; // categories with a natural order (Freshman, Sophomore, ...)
+  description: string;
+}
+
+export interface ExploreDataset {
+  id: string;
+  label: string;
+  noun: string; // what one row is, plural: "graduates"
+  description: string;
+  has_major: boolean; // can be filtered by major
+  fields: ExploreField[];
+}
+
+// GET /api/explore/{dataset}: one row per graduate/student/job/course with a value for x (and y)
+export interface ExploreRow {
+  x: number | string;
+  y?: number;
+  label: string; // what the row is, never a student ID
+}
+
+export interface ExploreResponse {
+  rows: ExploreRow[];
+  count: number;
+}
+
 export interface TopQuestion {
   id: number;
   question: string; // as the student typed it

@@ -131,6 +131,9 @@
   transition: transform 150ms ease, box-shadow 150ms ease;
 }
 
+/* Data explorer card, same shape as the planner card under it */
+.picker__plan--explore { --card: #0891b2; }
+
 .picker__plan:hover {
   transform: translateY(-4px);
   box-shadow: var(--shadow);
