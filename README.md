@@ -1,3 +1,3 @@
 # hackumbc2026
 
-Test Git Push
+DoIT Advisor to help students plan out their future.
