@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -439,9 +439,54 @@ def ai_ask(req: AskRequest):
     return {"answer": answer, "charts": charts, "cached": False}
 
 
+# Course results from the planner
+#   POST /api/plan/progress {results} -> {credits_earned, credits_transferred, credits_failed, gpa}
+#   results maps a course id to what happened in it: {"status": "passed", "grade": "B"},
+#   {"status": "transferred"} or {"status": "failed"}. Courses without an entry are just planned.
+#   GPA uses the transcripts' 4.0 scale: passed grades and F count, transfer credit doesn't.
+
+GRADE_POINTS = {"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0}
+
+class CourseResult(BaseModel):
+    status: Literal["passed", "transferred", "failed"]
+    grade: Literal["A", "B", "C", "D"] | None = Field(None, description="Only for passed courses.")
+
+    @model_validator(mode="after")
+    def grade_only_when_passed(self):
+        if (self.status == "passed") != (self.grade is not None):
+            raise ValueError("A passed course needs a grade (A-D); transferred and failed take none.")
+        return self
+
+class PlanProgressRequest(BaseModel):
+    results: dict[str, CourseResult] = Field(default_factory=dict,
+                                             description="Course id -> what happened in it.")
+
+@app.post("/api/plan/progress")
+def plan_progress(req: PlanProgressRequest):
+    credits = {c["course_id"]: c["credits"] for c in query("SELECT course_id, credits FROM course_catalog")}
+    unknown = [cid for cid in req.results if cid not in credits]
+    if unknown:
+        raise HTTPException(400, f"Unknown courses: {unknown}")
+
+    def total(status):
+        return sum(credits[cid] for cid, r in req.results.items() if r.status == status)
+
+    graded = [(credits[cid], GRADE_POINTS.get(r.grade, 0.0))  # failed counts as an F
+              for cid, r in req.results.items() if r.status != "transferred"]
+    graded_credits = sum(cr for cr, _ in graded)
+    return {
+        "credits_earned": total("passed") + total("transferred"),
+        "credits_transferred": total("transferred"),
+        "credits_failed": total("failed"),
+        "gpa": round(sum(cr * pts for cr, pts in graded) / graded_credits, 2) if graded_credits else None,
+    }
+
+
 # Plan advice via Gemini
-#   POST /api/ai/plan-advice {major, semesters, question} -> {answer}
-#   semesters is the planner's course ids per semester, first to last. The server looks each one
+#   POST /api/ai/plan-advice {major, semesters, terms, results, question} -> {answer}
+#   semesters is the planner's course ids per semester, first to last, and terms is each one's
+#   term ("Fall 2027"); older clients leave terms out. results is the same map as
+#   /api/plan/progress takes, for courses already finished. The server looks each course
 #   up in the catalog, so Gemini sees titles, credits, difficulty, prerequisites and terms offered.
 #   No semantic cache: every plan is different, so past answers rarely apply.
 
@@ -453,6 +498,10 @@ class PlanAdviceRequest(BaseModel):
     major: Literal["Computer Science", "Information Systems"]
     semesters: list[list[str]] = Field(..., max_length=PLAN_MAX_SEMESTERS,
                                        description="Course ids in each semester, first to last.")
+    terms: list[str] = Field(default_factory=list, max_length=PLAN_MAX_SEMESTERS,
+                             description='Each semester\'s term, e.g. "Fall 2027". Empty if unknown.')
+    results: dict[str, CourseResult] = Field(default_factory=dict,
+                                             description="Course id -> passed/transferred/failed. Missing = planned.")
     question: str = Field("", max_length=1000, description="Empty asks for a general review.")
 
 @app.post("/api/ai/plan-advice")
@@ -462,8 +511,10 @@ def plan_advice(req: PlanAdviceRequest):
     if unknown:
         raise HTTPException(400, f"Unknown courses: {unknown}")
 
+    has_terms = len(req.terms) == len(req.semesters)
     plan = [{
         "semester": i + 1,
+        **({"term": req.terms[i]} if has_terms else {}),
         "credits": sum(catalog[cid]["credits"] for cid in ids),
         "courses": [{
             "id": cid,
@@ -473,10 +524,13 @@ def plan_advice(req: PlanAdviceRequest):
             "difficulty": catalog[cid]["difficulty_index"],
             "prerequisites": split_list(catalog[cid]["prerequisite_ids"]),
             "terms": split_list(catalog[cid]["typical_terms_offered"]),
+            **({"result": req.results[cid].model_dump(exclude_none=True)} if cid in req.results else {}),
         } for cid in ids],
     } for i, ids in enumerate(req.semesters)]
 
-    placed = {cid for ids in req.semesters for cid in ids}
+    # A failed course still has to be retaken, so it doesn't count toward what's required
+    placed = {cid for ids in req.semesters for cid in ids
+              if cid not in req.results or req.results[cid].status != "failed"}
     missing_required = sorted(cid for cid, c in catalog.items()
                               if req.major in split_list(c["required_for_majors"]) and cid not in placed)
 
@@ -485,8 +539,13 @@ def plan_advice(req: PlanAdviceRequest):
         "Below is the student's current plan: each semester's courses with credits, difficulty "
         "(1.0 gentle to 5.0 demanding), prerequisites and the terms each course is usually offered. "
         "A full-time load is about 15 credits; more than 19 needs an overload approval. "
-        "Semester 1 is the student's first semester; assume semesters alternate Fall, Spring starting "
-        "with Fall unless the student says otherwise.\n\n"
+        + ("Each semester is labeled with the term the student plans to take it (e.g. Fall 2027).\n\n"
+           if has_terms else
+           "Semester 1 is the student's first semester; assume semesters alternate Fall, Summer, Spring starting "
+           "with Fall unless the student says otherwise.\n\n") +
+        "Courses with a result are already done: passed (with the letter grade), transferred in from another "
+        "school, or failed. A failed course must be retaken in a later semester before anything that needs it; "
+        "courses with no result are still planned.\n\n"
         "Base your advice on the plan. Point out semesters that are too heavy or too light, hard "
         "courses stacked together, courses placed in a term they aren't usually offered, and required "
         "courses that aren't in the plan yet. Suggest concrete moves (which course to which semester). "

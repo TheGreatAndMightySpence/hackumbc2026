@@ -7,8 +7,11 @@ import {
 import { useApi } from "../../api";
 import type { CourseMapData, CourseNodeInfo } from "../../types";
 import {
-  canPlace, levelOf, missingPrereqs, moveCourse, prereqsMet, settle, type Semesters,
+  canPlace, chronological, firstTerm, levelOf, missingPrereqs, moveCourse, nextResult, nextTerm, offeredIn,
+  prereqsMet, pruneResults, resultLabel, SEASONS, settle, termLabel,
+  type CourseResult, type Results, type Season, type Semesters, type Term,
 } from "./planLogic";
+import PlanProgress from "./PlanProgress";
 import CourseDetails, { Difficulty } from "./CourseDetails";
 import PlanAdvisor from "./PlanAdvisor";
 import "./CoursePlanner.css";
@@ -20,8 +23,14 @@ interface Props {
 const CREDIT_LIMIT = 19; // UMBC's normal per-semester max without an overload
 const FULL_LOAD = 15; // a typical full-time semester; the baseline for semester difficulty
 
+const MIN_YEAR = 2000;
+const MAX_YEAR = 2099;
+
 // Where a course can be dropped: a semester index, or back in the pool
 type DropTarget = number | "pool";
+
+// A semester's term, plus a key that stays with it when the semesters get re-sorted
+type PlanTerm = Term & { key: number };
 
 // What the pool shows: every level side by side, one level, or every unlocked / locked course
 type PoolFilter = "all" | "unlocked" | "locked" | number;
@@ -47,9 +56,11 @@ interface CardProps {
   course: CourseNodeInfo;
   onRemove?: () => void; // only for courses already in a semester
   onShowMore?: () => void; // only on expanded cards
+  result?: CourseResult; // placed courses: what happened in it, if anything yet
+  onCycleResult?: () => void; // placed courses: step to the next result
 }
 
-function CourseCard({ course, onRemove, onShowMore }: CardProps) {
+function CourseCard({ course, onRemove, onShowMore, result, onCycleResult }: CardProps) {
   const { setNodeRef, listeners, attributes, isDragging } = useDraggable({ id: course.id });
   const expanded = onShowMore !== undefined;
 
@@ -66,6 +77,17 @@ function CourseCard({ course, onRemove, onShowMore }: CardProps) {
       </div>
       {onRemove && (
         <button type="button" aria-label={`Remove ${course.id}`} onClick={onRemove}>×</button>
+      )}
+      {onCycleResult && (
+        <button
+          type="button"
+          className={`planner__result planner__result--${result?.status ?? "planned"}`}
+          aria-label={`${course.id}: ${resultLabel(result)}. Change result`}
+          title="Click to change: Planned, Passed (A–D), Transferred, Failed"
+          onClick={onCycleResult}
+        >
+          {resultLabel(result)}
+        </button>
       )}
       {onShowMore && (
         <button type="button" className="planner__more" aria-label={`More about ${course.id}`} onClick={onShowMore}>
@@ -121,13 +143,59 @@ function DropZone({ target, accepts, dragging, className, children }: ZoneProps)
   return <div ref={setNodeRef} className={className + state}>{children}</div>;
 }
 
+// ---------- Term picker ----------
+// Season changes apply right away; the year applies on blur or Enter, so typing "2027"
+// doesn't re-sort the semesters at "2", "20", "202" along the way
+interface TermPickerProps {
+  term: Term;
+  onChange: (term: Term) => void;
+}
+
+function TermPicker({ term, onChange }: TermPickerProps) {
+  const [year, setYear] = useState(String(term.year));
+
+  const commitYear = () => {
+    const value = Number(year);
+    if (Number.isInteger(value) && value >= MIN_YEAR && value <= MAX_YEAR) {
+      if (value !== term.year) onChange({ ...term, year: value });
+    } else {
+      setYear(String(term.year)); // not a usable year: put the old one back
+    }
+  };
+
+  return (
+    <span className="planner__term">
+      <select
+        aria-label="Season"
+        value={term.season}
+        onChange={e => onChange({ ...term, season: e.target.value as Season })}
+      >
+        {SEASONS.map(s => <option key={s} value={s}>{s}</option>)}
+      </select>
+      <input
+        type="number"
+        aria-label="Year"
+        min={MIN_YEAR}
+        max={MAX_YEAR}
+        value={year}
+        onChange={e => setYear(e.target.value)}
+        onBlur={commitYear}
+        onKeyDown={e => { if (e.key === "Enter") commitYear(); }}
+      />
+    </span>
+  );
+}
+
 // ---------- The planner ----------
 export default function CoursePlanner({ major }: Props) {
   const [semesters, setSemesters] = useState<Semesters>([]);
+  const [terms, setTerms] = useState<PlanTerm[]>([]); // terms[i] is semesters[i]'s term
+  const [nextKey, setNextKey] = useState(0);
   const [dragging, setDragging] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState<PoolFilter>("unlocked");
   const [detailsFor, setDetailsFor] = useState<string | null>(null); // course id in the popup
+  const [results, setResults] = useState<Results>({}); // placed course id -> passed / transferred / failed
 
   // Mouse: drag after moving 5px, so clicks still work.
   // Touch: press and hold, so a normal swipe still scrolls the page.
@@ -189,20 +257,52 @@ export default function CoursePlanner({ major }: Props) {
   const onFilterChange = (value: string) =>
     setFilter(value === "all" || value === "unlocked" || value === "locked" ? value : Number(value));
 
-  // Every change goes through here so courses that lost a prereq fall back to the pool
-  const apply = (next: Semesters) => {
-    const { semesters: settled, bumped } = settle(next, data);
+  // Every change goes through here so semesters stay in term order, and courses that
+  // lost a prereq (say, their semester's term moved earlier) or whose semester moved to a
+  // season they aren't offered in fall back to the pool
+  const apply = (next: Semesters, nextTerms: PlanTerm[] = terms) => {
+    const order = chronological(nextTerms);
+    const sortedTerms = order.map(i => nextTerms[i]);
+    const { semesters: settled, bumped, unoffered } = settle(order.map(i => next[i]), sortedTerms, data);
     setSemesters(settled);
-    setNotice(bumped.length
-      ? `${bumped.join(", ")} went back to the pool because a prerequisite is no longer in an earlier semester.`
-      : null);
+    setTerms(sortedTerms);
+    setResults(r => pruneResults(r, settled)); // a course back in the pool has no result
+
+    const notices = [
+      unoffered.length && `${unoffered.join(", ")} went back to the pool because ${unoffered.length > 1 ? "they aren't" : "it isn't"} offered in that semester's season.`,
+      bumped.length && `${bumped.join(", ")} went back to the pool because a prerequisite is no longer in an earlier semester.`,
+    ].filter(Boolean);
+    setNotice(notices.length ? notices.join(" ") : null);
   };
 
-  // Semesters accept a course whose prereqs are placed before them; the pool accepts placed courses
+  // New semesters default to the regular term after the latest one
+  const addSemester = () => {
+    const last = terms[terms.length - 1];
+    apply([...semesters, []], [...terms, { ...(last ? nextTerm(last) : firstTerm()), key: nextKey }]);
+    setNextKey(k => k + 1);
+  };
+
+  // Planned -> Passed A..D -> Transferred -> Failed -> Planned
+  const cycleResult = (id: string) =>
+    setResults(r => {
+      const { [id]: current, ...rest } = r;
+      const next = nextResult(current);
+      return next ? { ...rest, [id]: next } : rest;
+    });
+
+  const changeTerm = (index: number, term: Term) =>
+    apply(semesters, terms.map((t, i) => (i === index ? { ...term, key: t.key } : t)));
+
+  // Two semesters in the same term are almost certainly a typo
+  const termCounts = new Map<string, number>();
+  for (const t of terms) termCounts.set(termLabel(t), (termCounts.get(termLabel(t)) ?? 0) + 1);
+
+  // Semesters accept a course whose prereqs are placed before them and that's offered in
+  // their season; the pool accepts placed courses
   const accepts = (target: DropTarget) =>
     dragging !== null && (target === "pool"
       ? placed.has(dragging)
-      : canPlace(dragging, target, semesters, data));
+      : canPlace(dragging, target, semesters, terms, data));
 
   const onDragStart = ({ active }: DragStartEvent) => {
     setDragging(String(active.id));
@@ -222,19 +322,20 @@ export default function CoursePlanner({ major }: Props) {
     <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd} onDragCancel={() => setDragging(null)}>
       <section className="planner">
         {/* ---------- AI advisor: sees the plan as it stands ---------- */}
-        <PlanAdvisor major={major} semesters={semesters} />
+        <PlanAdvisor major={major} semesters={semesters} terms={terms.map(termLabel)} results={results} />
 
         {/* ---------- Pool: unlocked courses, by level ---------- */}
         <div className="planner__summary">
           <h2>Pick your courses</h2>
           <span>{placed.size} courses · {credits([...placed])} credits planned</span>
-          <button type="button" onClick={() => apply([])} disabled={semesters.length === 0}>
+          <button type="button" onClick={() => apply([], [])} disabled={semesters.length === 0}>
             Start over
           </button>
         </div>
+        <PlanProgress results={results} />
         <p className="planner__hint">
           Drag a course into a semester. Courses on the next level unlock once their prerequisites are in a semester,
-          and can only go in a semester after them.
+          and can only go in a semester after them. Courses only go in seasons they're usually offered.
         </p>
 
         <label className="planner__filter">
@@ -337,9 +438,10 @@ export default function CoursePlanner({ major }: Props) {
         <div className="planner__semesters">
           {semesters.map((ids, index) => {
             const total = credits(ids);
+            const term = terms[index];
             return (
               <DropZone
-                key={index}
+                key={term.key}
                 target={index}
                 accepts={accepts(index)}
                 dragging={dragging !== null}
@@ -347,12 +449,16 @@ export default function CoursePlanner({ major }: Props) {
               >
                 <header className="planner__semester-head">
                   <strong>Semester {index + 1}</strong>
+                  <TermPicker term={term} onChange={t => changeTerm(index, t)} />
                   <span className={total > CREDIT_LIMIT ? "planner__over" : undefined}>{total} cr</span>
                   {ids.length > 0 && <Difficulty value={semesterDifficulty(ids)} />}
+                  {termCounts.get(termLabel(term))! > 1 && (
+                    <span className="planner__over">Another semester is also {termLabel(term)}</span>
+                  )}
                   <button
                     type="button"
                     aria-label={`Remove semester ${index + 1}`}
-                    onClick={() => apply(semesters.filter((_, i) => i !== index))}
+                    onClick={() => apply(semesters.filter((_, i) => i !== index), terms.filter((_, i) => i !== index))}
                   >
                     Remove
                   </button>
@@ -364,11 +470,17 @@ export default function CoursePlanner({ major }: Props) {
                       key={id}
                       course={courses.get(id)!}
                       onRemove={() => apply(moveCourse(semesters, id, null))}
+                      result={results[id]}
+                      onCycleResult={() => cycleResult(id)}
                     />
                   ))}
                   {ids.length === 0 && <p className="planner__muted">Drag courses here</p>}
                   {dragging && !accepts(index) && !ids.includes(dragging) && (
-                    <p className="planner__muted">Needs its prerequisites in an earlier semester</p>
+                    <p className="planner__muted">
+                      {offeredIn(dragging, term, data)
+                        ? "Needs its prerequisites in an earlier semester"
+                        : `Not offered in ${term.season} (usually ${courses.get(dragging)!.terms.join(", ")})`}
+                    </p>
                   )}
                 </div>
               </DropZone>
@@ -376,11 +488,11 @@ export default function CoursePlanner({ major }: Props) {
           })}
         </div>
 
-        <button type="button" className="planner__add" onClick={() => setSemesters(s => [...s, []])}>
+        <button type="button" className="planner__add" onClick={addSemester}>
           + Add semester
         </button>
 
-        {/* TODO: list required courses that still aren't placed, and check Fall/Spring availability */}
+        {/* TODO: list required courses that still aren't placed */}
       </section>
 
       {/* The card that follows the pointer; rendered on top so the pool's scroll box can't clip it */}

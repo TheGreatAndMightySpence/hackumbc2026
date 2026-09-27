@@ -220,7 +220,7 @@
   border-style: solid;
   border-left: 5px solid var(--card);
 }
-
+  
 .planner__course button {
   font: inherit;
   font-size: 16px;
@@ -260,6 +260,47 @@
   outline: 3px solid var(--card);
   outline-offset: 2px;
   border-radius: 4px;
+}
+
+/* Placed cards: the result button wraps onto its own row under the body */
+.planner__course--placed {
+  flex-wrap: wrap;
+}
+
+.planner__course .planner__result {
+  --result: var(--text);
+  flex-basis: 100%;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  padding: 3px 8px;
+  color: var(--result);
+  background: color-mix(in srgb, var(--result) 10%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--result) 40%, transparent);
+  border-radius: 999px;
+}
+
+.planner__course .planner__result--passed { --result: #16a34a; }
+.planner__course .planner__result--transferred { --result: #2563eb; }
+.planner__course .planner__result--failed { --result: #dc2626; }
+
+.planner__course .planner__result:hover {
+  color: var(--result);
+  border-color: var(--result);
+}
+
+.planner__course .planner__result:focus-visible {
+  outline: 3px solid var(--card);
+  outline-offset: 2px;
+}
+
+.planner__progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-h);
 }
 
 /* Locked cards can't be dragged, so they look inert: grey border, no grab cursor */
@@ -453,6 +494,40 @@
   margin-left: auto;
   font-size: 13px;
   padding: 4px 10px;
+}
+
+.planner__term {
+  display: flex;
+  gap: 6px;
+}
+
+.planner__term select,
+.planner__term input {
+  font: inherit;
+  font-size: 14px;
+  padding: 4px 8px;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.planner__term select {
+  cursor: pointer;
+}
+
+.planner__term input {
+  width: 5.5em;
+}
+
+.planner__term select:focus-visible,
+.planner__term input:focus-visible {
+  outline: 3px solid var(--card);
+  outline-offset: 2px;
+}
+
+.planner__semester-head {
+  flex-wrap: wrap;
 }
 
 .planner__semester-head .planner__difficulty {

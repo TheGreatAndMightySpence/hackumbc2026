@@ -1,16 +1,18 @@
 import { useState } from "react";
 import type { PlanAdviceResponse } from "../../types";
 import MarkdownText from "../MarkdownText";
-import type { Semesters } from "./planLogic";
+import type { Results, Semesters } from "./planLogic";
 import "./PlanAdvisor.css";
 
 interface Props {
   major: string; // "Computer Science" | "Information Systems"
   semesters: Semesters; // sent as-is; the server looks each course up in the catalog
+  terms: string[]; // each semester's term, e.g. "Fall 2027"
+  results: Results; // courses already passed / transferred / failed
 }
 
 // Asks the AI about the plan as it stands: an empty question gets a general review
-export default function PlanAdvisor({ major, semesters }: Props) {
+export default function PlanAdvisor({ major, semesters, terms, results }: Props) {
   const [question, setQuestion] = useState("");
   const [asked, setAsked] = useState<string | null>(null);
   const [answer, setAnswer] = useState<string | null>(null);
@@ -18,7 +20,7 @@ export default function PlanAdvisor({ major, semesters }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const plan = JSON.stringify(semesters);
+  const plan = JSON.stringify({ semesters, terms, results });
   const stale = answer !== null && askedPlan !== plan;
 
   async function ask(q: string) {
@@ -31,7 +33,7 @@ export default function PlanAdvisor({ major, semesters }: Props) {
       const res = await fetch("/api/ai/plan-advice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ major, semesters, question: q }),
+        body: JSON.stringify({ major, semesters, terms, results, question: q }),
       });
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       const data = (await res.json()) as PlanAdviceResponse;

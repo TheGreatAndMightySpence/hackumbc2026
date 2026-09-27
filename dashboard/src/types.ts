@@ -82,6 +82,14 @@ export interface PlanAdviceResponse {
   answer: string;
 }
 
+// POST /api/plan/progress: the planner's course results, totaled up
+export interface PlanProgressResponse {
+  credits_earned: number; // passed + transferred
+  credits_transferred: number;
+  credits_failed: number;
+  gpa: number | null; // null until a course has a grade (transfer credit doesn't count)
+}
+
 export interface TopQuestion {
   id: number;
   question: string; // as the student typed it
