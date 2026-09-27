@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import type { PlanProgressResponse } from "../../types";
-import type { Results } from "./planLogic";
+import { resultList, type Results } from "./planLogic";
 
 interface Props {
-  results: Results; // sent as-is; the server looks each course's credits up in the catalog
+  results: Results; // sent as one entry per attempt; the server looks each course's credits up in the catalog
 }
 
 // Sends the student's course results to the API whenever they change, and shows the totals it sends back
@@ -11,7 +11,7 @@ export default function PlanProgress({ results }: Props) {
   const [progress, setProgress] = useState<PlanProgressResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const body = JSON.stringify({ results });
+  const body = JSON.stringify({ results: resultList(results) });
   const empty = Object.keys(results).length === 0;
 
   useEffect(() => {

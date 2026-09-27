@@ -1,7 +1,21 @@
 import type { CourseMapData, CourseNodeInfo } from "../../types";
 
-// semester index -> course ids placed in it
+// semester index -> the attempts placed in it (see attemptKey)
 export type Semesters = string[][];
+
+// ---------- Attempts ----------
+// A failed course can be taken again, so the same course can sit in more than one semester.
+// Each placement is keyed by attempt: the first is the bare course id ("CMSC201"),
+// retakes add the attempt number ("CMSC201#2", "CMSC201#3", ...)
+export const attemptKey = (id: string, attempt: number) => (attempt === 1 ? id : `${id}#${attempt}`);
+export const courseOf = (key: string) => key.split("#")[0];
+export const attemptOf = (key: string) => Number(key.split("#")[1] ?? 1);
+
+// Failing a course twice means a third attempt needs permission
+export const PERMISSION_ATTEMPT = 3;
+
+// "CMSC201", or "CMSC201 (retake)" for a later attempt; for notices
+export const attemptName = (key: string) => (attemptOf(key) === 1 ? key : `${courseOf(key)} (retake)`);
 
 // ---------- Terms ----------
 // Seasons in calendar order, so Spring 2027 < Summer 2027 < Fall 2027
@@ -57,9 +71,17 @@ export function missingPrereqs(id: string, data: CourseMapData, done: Set<string
   return missing;
 }
 
-// Everything placed in semesters before `index`
+// Every course placed in semesters before `index`
 export const doneBefore = (semesters: Semesters, index: number) =>
-  new Set(semesters.slice(0, index).flat());
+  new Set(semesters.slice(0, index).flat().map(courseOf));
+
+// A retake has to come after the attempt it retakes; a first attempt always can
+export function afterPreviousAttempt(key: string, index: number, semesters: Semesters): boolean {
+  const attempt = attemptOf(key);
+  if (attempt === 1) return true;
+  const previous = attemptKey(courseOf(key), attempt - 1);
+  return semesters.slice(0, index).some(ids => ids.includes(previous));
+}
 
 // Is `id` normally offered in `term`'s season? The catalog lists seasons ("Fall", "Spring", "Summer");
 // a course with none listed is treated as offered every term
@@ -68,10 +90,12 @@ export function offeredIn(id: string, term: Term, data: CourseMapData): boolean 
   return seasons.length === 0 || seasons.includes(term.season);
 }
 
-// A course can go in a semester once its prereqs sit in an earlier semester
-// and it's offered in that semester's season
-export const canPlace = (id: string, index: number, semesters: Semesters, terms: Term[], data: CourseMapData) =>
-  prereqsMet(id, data, doneBefore(semesters, index)) && offeredIn(id, terms[index], data);
+// An attempt can go in a semester once its course's prereqs sit in an earlier semester,
+// it's offered in that semester's season, and (for a retake) the failed attempt is earlier
+export const canPlace = (key: string, index: number, semesters: Semesters, terms: Term[], data: CourseMapData) =>
+  prereqsMet(courseOf(key), data, doneBefore(semesters, index))
+  && offeredIn(courseOf(key), terms[index], data)
+  && afterPreviousAttempt(key, index, semesters);
 
 // ---------- Course results ----------
 // What happened to a placed course. A course with no result is just planned.
@@ -83,7 +107,7 @@ export type CourseResult =
   | { status: "transferred" }
   | { status: "failed" };
 
-// course id -> its result; sent to the API as-is
+// attempt key -> its result
 export type Results = Record<string, CourseResult>;
 
 // The order the card's button steps through; null is "planned", and it wraps back around
@@ -102,11 +126,48 @@ export function nextResult(current: CourseResult | undefined): CourseResult | nu
   return RESULT_CYCLE[(index + 1) % RESULT_CYCLE.length];
 }
 
-// Only keep results for courses still in a semester
-export const pruneResults = (results: Results, semesters: Semesters): Results => {
+// Keep results only for attempts still in a semester, and a retake only while the attempt
+// before it is placed and failed. Dropping one can orphan the next (un-failing attempt 1
+// drops retake 2, which drops its result, which drops retake 3), so repeat until nothing changes.
+// `dropped` lists the placed retakes that were removed.
+export function pruneAttempts(semesters: Semesters, results: Results) {
+  const dropped: string[] = [];
+  for (;;) {
+    const placed = new Set(semesters.flat());
+    const kept: Results = Object.fromEntries(Object.entries(results).filter(([key]) => placed.has(key)));
+    const valid = (key: string) =>
+      attemptOf(key) === 1 || kept[attemptKey(courseOf(key), attemptOf(key) - 1)]?.status === "failed";
+    const removed = [...placed].filter(key => !valid(key));
+    if (removed.length === 0 && Object.keys(kept).length === Object.keys(results).length) {
+      return { semesters, results: kept, dropped };
+    }
+    dropped.push(...removed);
+    semesters = semesters.map(keys => keys.filter(valid));
+    results = kept;
+  }
+}
+
+// Retakes waiting in the pool: the next attempt of every failed attempt that isn't placed yet
+export const pendingRetakes = (semesters: Semesters, results: Results): string[] => {
   const placed = new Set(semesters.flat());
-  return Object.fromEntries(Object.entries(results).filter(([id]) => placed.has(id)));
+  return Object.entries(results)
+    .filter(([, r]) => r.status === "failed")
+    .map(([key]) => attemptKey(courseOf(key), attemptOf(key) + 1))
+    .filter(key => !placed.has(key));
 };
+
+// Courses failed often enough that taking them again needs permission
+export function needsPermission(results: Results): string[] {
+  const fails = new Map<string, number>();
+  for (const [key, r] of Object.entries(results)) {
+    if (r.status === "failed") fails.set(courseOf(key), (fails.get(courseOf(key)) ?? 0) + 1);
+  }
+  return [...fails].filter(([, n]) => n >= PERMISSION_ATTEMPT - 1).map(([id]) => id);
+}
+
+// What the API takes: one entry per attempt with a result
+export const resultList = (results: Results) =>
+  Object.entries(results).map(([key, r]) => ({ course_id: courseOf(key), attempt: attemptOf(key), ...r }));
 
 // Take `id` out of wherever it is and put it in semester `to` (null = back to the pool)
 export function moveCourse(semesters: Semesters, id: string, to: number | null): Semesters {
@@ -115,23 +176,29 @@ export function moveCourse(semesters: Semesters, id: string, to: number | null):
   return next;
 }
 
-// Send back to the pool any course that's no longer offered in its semester's season
-// (`unoffered`), or whose prereqs are no longer in an earlier semester (`bumped`).
+// Send back to the pool any attempt that's no longer offered in its semester's season
+// (`unoffered`), whose prereqs are no longer in an earlier semester (`bumped`), or that's
+// a retake no longer after the attempt it retakes (`early`).
 // Prereqs only point backwards, so one pass from the first semester onward catches
 // chains (dropping CMSC201 bumps CMSC202, which then bumps CMSC341, ...)
 export function settle(semesters: Semesters, terms: Term[], data: CourseMapData) {
-  const done = new Set<string>();
+  const done = new Set<string>(); // course ids, for prereqs
+  const earlier = new Set<string>(); // attempts, for retakes
   const bumped: string[] = [];
   const unoffered: string[] = [];
-  const kept = semesters.map((ids, index) => {
+  const early: string[] = [];
+  const kept = semesters.map((keys, index) => {
     const stay: string[] = [];
-    for (const id of ids) {
-      if (!offeredIn(id, terms[index], data)) unoffered.push(id);
-      else if (!prereqsMet(id, data, done)) bumped.push(id);
-      else stay.push(id);
+    for (const key of keys) {
+      const id = courseOf(key);
+      if (!offeredIn(id, terms[index], data)) unoffered.push(key);
+      else if (!prereqsMet(id, data, done)) bumped.push(key);
+      else if (attemptOf(key) > 1 && !earlier.has(attemptKey(id, attemptOf(key) - 1))) early.push(key);
+      else stay.push(key);
     }
-    stay.forEach(id => done.add(id)); // only unlocks later semesters, not this one
+    // only unlocks later semesters, not this one
+    stay.forEach(key => { done.add(courseOf(key)); earlier.add(key); });
     return stay;
   });
-  return { semesters: kept, bumped, unoffered };
+  return { semesters: kept, bumped, unoffered, early };
 }

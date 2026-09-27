@@ -160,6 +160,11 @@
   content: none;
 }
 
+/* Retakes sit before level 0 but don't lead into it, so no arrow */
+.planner__level--retakes:not(:last-child)::after {
+  content: none;
+}
+
 /* ---------- Course cards ---------- */
 .planner__course {
   display: flex;
@@ -282,7 +287,6 @@
 
 .planner__course .planner__result--passed { --result: #16a34a; }
 .planner__course .planner__result--transferred { --result: #2563eb; }
-.planner__course .planner__result--failed { --result: #dc2626; }
 
 .planner__course .planner__result:hover {
   color: var(--result);
@@ -318,6 +322,20 @@
   margin-top: 6px;
   font-size: 12px;
   white-space: normal;
+}
+
+/* Retakes: a red label, so they don't read as a second copy by mistake */
+.planner__attempt {
+  font-weight: 600;
+  color: #dc2626;
+}
+
+.planner__course .planner__permission {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: normal;
+  color: #b91c1c;
 }
 
 /* ---------- Difficulty meter ---------- */
@@ -458,6 +476,17 @@
   padding: 8px 12px;
   color: #b45309;
   background: color-mix(in srgb, #d97706 12%, var(--bg));
+  border-radius: 8px;
+}
+
+/* Failed a course twice: stays up until the student changes a result */
+.planner__warning {
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 12px;
+  color: #b91c1c;
+  background: color-mix(in srgb, #dc2626 12%, var(--bg));
+  border-left: 4px solid #dc2626;
   border-radius: 8px;
 }
 

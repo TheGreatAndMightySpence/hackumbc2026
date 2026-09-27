@@ -1,12 +1,12 @@
 import { useState } from "react";
 import type { PlanAdviceResponse } from "../../types";
 import MarkdownText from "../MarkdownText";
-import type { Results, Semesters } from "./planLogic";
+import { courseOf, resultList, type Results, type Semesters } from "./planLogic";
 import "./PlanAdvisor.css";
 
 interface Props {
   major: string; // "Computer Science" | "Information Systems"
-  semesters: Semesters; // sent as-is; the server looks each course up in the catalog
+  semesters: Semesters; // sent as course ids (a retake repeats its id); the server looks each up in the catalog
   terms: string[]; // each semester's term, e.g. "Fall 2027"
   results: Results; // courses already passed / transferred / failed
 }
@@ -33,7 +33,13 @@ export default function PlanAdvisor({ major, semesters, terms, results }: Props)
       const res = await fetch("/api/ai/plan-advice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ major, semesters, terms, results, question: q }),
+        body: JSON.stringify({
+          major,
+          semesters: semesters.map(keys => keys.map(courseOf)),
+          terms,
+          results: resultList(results),
+          question: q,
+        }),
       });
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       const data = (await res.json()) as PlanAdviceResponse;

@@ -441,13 +441,18 @@ def ai_ask(req: AskRequest):
 
 # Course results from the planner
 #   POST /api/plan/progress {results} -> {credits_earned, credits_transferred, credits_failed, gpa}
-#   results maps a course id to what happened in it: {"status": "passed", "grade": "B"},
-#   {"status": "transferred"} or {"status": "failed"}. Courses without an entry are just planned.
-#   GPA uses the transcripts' 4.0 scale: passed grades and F count, transfer credit doesn't.
+#   results lists what happened in each attempt at a course, e.g.
+#   {"course_id": "CMSC201", "attempt": 1, "status": "failed"} then
+#   {"course_id": "CMSC201", "attempt": 2, "status": "passed", "grade": "B"}.
+#   status is passed (with a grade), transferred or failed; attempts not listed are just planned.
+#   GPA uses the transcripts' 4.0 scale: every graded attempt counts (a fail as an F),
+#   transfer credit doesn't.
 
 GRADE_POINTS = {"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0}
 
 class CourseResult(BaseModel):
+    course_id: str
+    attempt: int = Field(1, ge=1, description="1 for the first try, 2 for the first retake, ...")
     status: Literal["passed", "transferred", "failed"]
     grade: Literal["A", "B", "C", "D"] | None = Field(None, description="Only for passed courses.")
 
@@ -458,21 +463,20 @@ class CourseResult(BaseModel):
         return self
 
 class PlanProgressRequest(BaseModel):
-    results: dict[str, CourseResult] = Field(default_factory=dict,
-                                             description="Course id -> what happened in it.")
+    results: list[CourseResult] = Field(default_factory=list, description="One entry per attempt with a result.")
 
 @app.post("/api/plan/progress")
 def plan_progress(req: PlanProgressRequest):
     credits = {c["course_id"]: c["credits"] for c in query("SELECT course_id, credits FROM course_catalog")}
-    unknown = [cid for cid in req.results if cid not in credits]
+    unknown = [r.course_id for r in req.results if r.course_id not in credits]
     if unknown:
         raise HTTPException(400, f"Unknown courses: {unknown}")
 
     def total(status):
-        return sum(credits[cid] for cid, r in req.results.items() if r.status == status)
+        return sum(credits[r.course_id] for r in req.results if r.status == status)
 
-    graded = [(credits[cid], GRADE_POINTS.get(r.grade, 0.0))  # failed counts as an F
-              for cid, r in req.results.items() if r.status != "transferred"]
+    graded = [(credits[r.course_id], GRADE_POINTS.get(r.grade, 0.0))  # failed counts as an F
+              for r in req.results if r.status != "transferred"]
     graded_credits = sum(cr for cr, _ in graded)
     return {
         "credits_earned": total("passed") + total("transferred"),
@@ -485,8 +489,8 @@ def plan_progress(req: PlanProgressRequest):
 # Plan advice via Gemini
 #   POST /api/ai/plan-advice {major, semesters, terms, results, question} -> {answer}
 #   semesters is the planner's course ids per semester, first to last, and terms is each one's
-#   term ("Fall 2027"); older clients leave terms out. results is the same map as
-#   /api/plan/progress takes, for courses already finished. The server looks each course
+#   term ("Fall 2027"); older clients leave terms out. A retake repeats its course id in a later
+#   semester. results is the same list /api/plan/progress takes. The server looks each course
 #   up in the catalog, so Gemini sees titles, credits, difficulty, prerequisites and terms offered.
 #   No semantic cache: every plan is different, so past answers rarely apply.
 
@@ -500,8 +504,7 @@ class PlanAdviceRequest(BaseModel):
                                        description="Course ids in each semester, first to last.")
     terms: list[str] = Field(default_factory=list, max_length=PLAN_MAX_SEMESTERS,
                              description='Each semester\'s term, e.g. "Fall 2027". Empty if unknown.')
-    results: dict[str, CourseResult] = Field(default_factory=dict,
-                                             description="Course id -> passed/transferred/failed. Missing = planned.")
+    results: list[CourseResult] = Field(default_factory=list, description="One entry per attempt with a result.")
     question: str = Field("", max_length=1000, description="Empty asks for a general review.")
 
 @app.post("/api/ai/plan-advice")
@@ -511,26 +514,43 @@ def plan_advice(req: PlanAdviceRequest):
     if unknown:
         raise HTTPException(400, f"Unknown courses: {unknown}")
 
+    # Semesters run first to last, so the nth time a course shows up is its nth attempt
+    results = {(r.course_id, r.attempt): r for r in req.results}
+    attempts = {}
     has_terms = len(req.terms) == len(req.semesters)
-    plan = [{
-        "semester": i + 1,
-        **({"term": req.terms[i]} if has_terms else {}),
-        "credits": sum(catalog[cid]["credits"] for cid in ids),
-        "courses": [{
-            "id": cid,
-            "title": catalog[cid]["course_title"],
-            "credits": catalog[cid]["credits"],
-            "type": catalog[cid]["course_type"],
-            "difficulty": catalog[cid]["difficulty_index"],
-            "prerequisites": split_list(catalog[cid]["prerequisite_ids"]),
-            "terms": split_list(catalog[cid]["typical_terms_offered"]),
-            **({"result": req.results[cid].model_dump(exclude_none=True)} if cid in req.results else {}),
-        } for cid in ids],
-    } for i, ids in enumerate(req.semesters)]
+    plan = []
+    for i, ids in enumerate(req.semesters):
+        courses = []
+        for cid in ids:
+            attempts[cid] = attempts.get(cid, 0) + 1
+            result = results.get((cid, attempts[cid]))
+            courses.append({
+                "id": cid,
+                **({"attempt": attempts[cid]} if attempts[cid] > 1 else {}),
+                "title": catalog[cid]["course_title"],
+                "credits": catalog[cid]["credits"],
+                "type": catalog[cid]["course_type"],
+                "difficulty": catalog[cid]["difficulty_index"],
+                "prerequisites": split_list(catalog[cid]["prerequisite_ids"]),
+                "terms": split_list(catalog[cid]["typical_terms_offered"]),
+                **({"result": result.model_dump(exclude={"course_id", "attempt"}, exclude_none=True)}
+                   if result else {}),
+            })
+        plan.append({
+            "semester": i + 1,
+            **({"term": req.terms[i]} if has_terms else {}),
+            "credits": sum(catalog[cid]["credits"] for cid in ids),
+            "courses": courses,
+        })
 
-    # A failed course still has to be retaken, so it doesn't count toward what's required
-    placed = {cid for ids in req.semesters for cid in ids
-              if cid not in req.results or req.results[cid].status != "failed"}
+    # A course counts toward what's required once some attempt at it isn't a fail
+    failed = {(r.course_id, r.attempt) for r in req.results if r.status == "failed"}
+    attempts = {}
+    placed = set()
+    for cid in (cid for ids in req.semesters for cid in ids):
+        attempts[cid] = attempts.get(cid, 0) + 1
+        if (cid, attempts[cid]) not in failed:
+            placed.add(cid)
     missing_required = sorted(cid for cid, c in catalog.items()
                               if req.major in split_list(c["required_for_majors"]) and cid not in placed)
 
@@ -545,7 +565,8 @@ def plan_advice(req: PlanAdviceRequest):
            "with Fall unless the student says otherwise.\n\n") +
         "Courses with a result are already done: passed (with the letter grade), transferred in from another "
         "school, or failed. A failed course must be retaken in a later semester before anything that needs it; "
-        "courses with no result are still planned.\n\n"
+        "a retake shows up again with its attempt number. A student who has failed a course twice needs "
+        "permission to take it a third time. Courses with no result are still planned.\n\n"
         "Base your advice on the plan. Point out semesters that are too heavy or too light, hard "
         "courses stacked together, courses placed in a term they aren't usually offered, and required "
         "courses that aren't in the plan yet. Suggest concrete moves (which course to which semester). "
