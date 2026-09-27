@@ -21,7 +21,7 @@ export const PATHS: PathOption[] = [
   },
   {
     id: "it",
-    title: "InfoTech",
+    title: "Information Systems",
     tagline: "Run the technology",
     description: "Information Systems: databases, business analytics, security management and IT strategy.",
     majors: ["Information Systems"],

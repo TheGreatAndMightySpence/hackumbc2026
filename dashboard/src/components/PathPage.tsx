@@ -31,7 +31,7 @@ export default function PathPage({ pathId, onChangePath }: Props) {
       </header>
 
       {/* TODO: pass path.majors into these so they only show the chosen major(s),
-          and for "both" render CS and InfoTech side by side */}
+          and for "both" render CS and Information Systems side by side */}
       <main className="path-page__content">
         <h1>What would you like to know?</h1>
         <QuickInformation majors={path.majors} />
