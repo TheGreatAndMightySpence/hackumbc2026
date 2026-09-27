@@ -109,6 +109,57 @@
   font-size: 16px;
 }
 
+.planner__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---------- Level dropdown ---------- */
+.planner__filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.planner__filter select {
+  font: inherit;
+  padding: 6px 10px;
+  color: var(--text-h);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.planner__filter select:focus-visible {
+  outline: 3px solid var(--card);
+  outline-offset: 2px;
+}
+
+/* One level shown: it takes the full width and its cards spread into a grid */
+.planner__pool--single .planner__level {
+  flex: 1 1 auto;
+}
+
+.planner__pool--single .planner__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  align-items: start;
+}
+
+/* Unlocked view: its levels stack top to bottom, each full width, no sideways arrows */
+.planner__pool--stacked {
+  flex-direction: column;
+  gap: 20px;
+}
+
+.planner__pool--stacked .planner__level::after {
+  content: none;
+}
+
 /* ---------- Course cards ---------- */
 .planner__course {
   display: flex;
@@ -144,8 +195,10 @@
   opacity: 0.35;
 }
 
+/* DragOverlay sizes its wrapper to the card that was picked up; fill it */
 .planner__course--overlay {
-  width: 200px;
+  width: 100%;
+  height: 100%;
   box-sizing: border-box;
   cursor: grabbing;
   border-style: solid;
@@ -181,6 +234,182 @@
 
 .planner__course button:hover {
   color: #dc2626;
+}
+
+/* Expanded cards: "Show more" wraps onto its own row under the body */
+.planner__course--expanded {
+  flex-wrap: wrap;
+  padding: 10px 12px;
+}
+
+.planner__course .planner__more {
+  flex-basis: 100%;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  padding: 2px 0 0;
+  color: var(--card);
+}
+
+.planner__course .planner__more:hover {
+  color: var(--text-h);
+  text-decoration: underline;
+}
+
+.planner__course .planner__more:focus-visible {
+  outline: 3px solid var(--card);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Locked cards can't be dragged, so they look inert: grey border, no grab cursor */
+.planner__course--locked {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--text) 5%, var(--bg));
+}
+
+.planner__locked-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.planner__course .planner__needs {
+  margin-top: 6px;
+  font-size: 12px;
+  white-space: normal;
+}
+
+/* ---------- Difficulty meter ---------- */
+.planner__difficulty {
+  --level: #16a34a;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.planner__difficulty--moderate { --level: #d97706; }
+.planner__difficulty--demanding { --level: #dc2626; }
+
+.planner__meter {
+  flex: 0 0 56px;
+  height: 6px;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.planner__meter span {
+  display: block;
+  height: 100%;
+  background: var(--level);
+  border-radius: 3px;
+}
+
+/* ---------- Course details popup ---------- */
+.planner__dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  padding: 0;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-top: 5px solid var(--card);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.planner__dialog::backdrop {
+  background: rgb(0 0 0 / 0.45);
+}
+
+.planner__dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 24px 24px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.planner__dialog-body > * {
+  margin: 0;
+}
+
+.planner__dialog header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.planner__dialog h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 20px;
+  color: var(--text-h);
+}
+
+.planner__dialog h2 span {
+  display: block;
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--text);
+}
+
+.planner__dialog h3 {
+  font-size: 15px;
+  color: var(--text-h);
+}
+
+.planner__dialog header button {
+  font: inherit;
+  font-size: 22px;
+  line-height: 1;
+  padding: 2px 8px;
+  color: var(--text);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.planner__dialog header button:hover {
+  color: var(--text-h);
+  background: var(--border);
+}
+
+.planner__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  font-size: 14px;
+}
+
+.planner__facts dt {
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.planner__facts dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.planner__facts .planner__difficulty {
+  margin: 0;
+  font-size: 14px;
+}
+
+.planner__tag {
+  padding: 0 8px;
+  font-size: 13px;
+  color: var(--text-h);
+  background: color-mix(in srgb, var(--card) 12%, var(--bg));
+  border-radius: 999px;
 }
 
 .planner__notice {
@@ -224,6 +453,10 @@
   margin-left: auto;
   font-size: 13px;
   padding: 4px 10px;
+}
+
+.planner__semester-head .planner__difficulty {
+  margin-top: 0;
 }
 
 .planner__over {

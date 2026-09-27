@@ -121,9 +121,47 @@ def course_map(major: str, electives: bool = False):
         "type": catalog[cid]["course_type"],
         "terms": split_list(catalog[cid]["typical_terms_offered"]),
         "semester": semester(cid),
+        "difficulty": catalog[cid]["difficulty_index"],
     } for cid in sorted(chosen)]
 
     return {"nodes": nodes, "edges": edges}
+
+
+# One course in detail: the catalog entry plus how students have done in it.
+# The catalog has no description text, so the planner builds its "Show more" popup from this.
+@app.get("/api/courses/{course_id}")
+def course_detail(course_id: str):
+    rows = query("SELECT * FROM course_catalog WHERE course_id = ?", (course_id,))
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No course {course_id}")
+    c = rows[0]
+
+    # Finished attempts only: IP (in progress) has no outcome yet
+    stats = query("""
+        SELECT COUNT(*) AS attempts,
+               ROUND(AVG(grade_points), 2) AS avg_grade_points,
+               SUM(grade IN ('A','B','C','D')) AS passed,
+               SUM(grade = 'W') AS withdrew
+        FROM transcripts WHERE course_id = ? AND grade != 'IP'
+    """, (course_id,))[0]
+    attempts = stats["attempts"]
+
+    return {
+        "id": c["course_id"],
+        "title": c["course_title"],
+        "credits": c["credits"],
+        "level": c["course_level"],
+        "type": c["course_type"],
+        "difficulty": c["difficulty_index"],
+        "skills": split_list(c["skill_tags"]),
+        "prerequisites": split_list(c["prerequisite_ids"]),  # each entry may read "A or B"
+        "required_for": split_list(c["required_for_majors"]),
+        "terms": split_list(c["typical_terms_offered"]),
+        "attempts": attempts,
+        "avg_grade_points": stats["avg_grade_points"],
+        "pass_rate": round(stats["passed"] / attempts, 3) if attempts else None,
+        "withdraw_rate": round(stats["withdrew"] / attempts, 3) if attempts else None,
+    }
 
 
 

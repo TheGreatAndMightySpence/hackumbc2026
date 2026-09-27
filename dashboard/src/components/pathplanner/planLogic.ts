@@ -19,6 +19,16 @@ export function prereqsMet(id: string, data: CourseMapData, done: Set<string>): 
     && (options.length === 0 || options.some(e => done.has(e.source)));
 }
 
+// What still stands between the student and `id`, by the same rules as prereqsMet:
+// each unplaced required prereq, plus "A or B" if none of the alternatives is placed
+export function missingPrereqs(id: string, data: CourseMapData, done: Set<string>): string[] {
+  const incoming = data.edges.filter(e => e.target === id);
+  const missing = incoming.filter(e => !e.alternative && !done.has(e.source)).map(e => e.source);
+  const options = incoming.filter(e => e.alternative).map(e => e.source);
+  if (options.length > 0 && !options.some(o => done.has(o))) missing.push(options.join(" or "));
+  return missing;
+}
+
 // Everything placed in semesters before `index`
 export const doneBefore = (semesters: Semesters, index: number) =>
   new Set(semesters.slice(0, index).flat());

@@ -7,8 +7,9 @@ import {
 import { useApi } from "../../api";
 import type { CourseMapData, CourseNodeInfo } from "../../types";
 import {
-  canPlace, levelOf, moveCourse, prereqsMet, settle, type Semesters,
+  canPlace, levelOf, missingPrereqs, moveCourse, prereqsMet, settle, type Semesters,
 } from "./planLogic";
+import CourseDetails, { Difficulty } from "./CourseDetails";
 import "./CoursePlanner.css";
 
 interface Props {
@@ -16,21 +17,27 @@ interface Props {
 }
 
 const CREDIT_LIMIT = 19; // UMBC's normal per-semester max without an overload
+const FULL_LOAD = 15; // a typical full-time semester; the baseline for semester difficulty
 
 // Where a course can be dropped: a semester index, or back in the pool
 type DropTarget = number | "pool";
+
+// What the pool shows: every level side by side, one level, or every unlocked / locked course
+type PoolFilter = "all" | "unlocked" | "locked" | number;
 
 // dnd-kit ids are strings, so semesters are "semester-0", "semester-1", ...
 const zoneId = (target: DropTarget) => (target === "pool" ? "pool" : `semester-${target}`);
 const parseZone = (id: string): DropTarget => (id === "pool" ? "pool" : Number(id.replace("semester-", "")));
 
 // ---------- Course cards ----------
-// What a course looks like; shared by the card in place and the copy that follows the pointer
-function CardBody({ course }: { course: CourseNodeInfo }) {
+// What a course looks like; shared by the card in place and the copy that follows the pointer.
+// Expanded cards (one level shown, so there's room) also show the difficulty.
+function CardBody({ course, expanded }: { course: CourseNodeInfo; expanded?: boolean }) {
   return (
     <div className="planner__card-body">
       <strong>{course.id}</strong> · {course.credits} cr
       <p title={course.title}>{course.title}</p>
+      {expanded && <Difficulty value={course.difficulty} />}
     </div>
   );
 }
@@ -38,23 +45,53 @@ function CardBody({ course }: { course: CourseNodeInfo }) {
 interface CardProps {
   course: CourseNodeInfo;
   onRemove?: () => void; // only for courses already in a semester
+  onShowMore?: () => void; // only on expanded cards
 }
 
-function CourseCard({ course, onRemove }: CardProps) {
+function CourseCard({ course, onRemove, onShowMore }: CardProps) {
   const { setNodeRef, listeners, attributes, isDragging } = useDraggable({ id: course.id });
+  const expanded = onShowMore !== undefined;
+
+  let className = "planner__course";
+  if (onRemove) className += " planner__course--placed";
+  if (expanded) className += " planner__course--expanded";
+  if (isDragging) className += " is-dragging";
 
   return (
-    <div
-      ref={setNodeRef}
-      className={`planner__course${onRemove ? " planner__course--placed" : ""}${isDragging ? " is-dragging" : ""}`}
-    >
-      {/* Drag listeners live on the body only, so the × button stays a plain button */}
+    <div ref={setNodeRef} className={className}>
+      {/* Drag listeners live on the body only, so the buttons stay plain buttons */}
       <div className="planner__handle" {...listeners} {...attributes}>
-        <CardBody course={course} />
+        <CardBody course={course} expanded={expanded} />
       </div>
       {onRemove && (
         <button type="button" aria-label={`Remove ${course.id}`} onClick={onRemove}>×</button>
       )}
+      {onShowMore && (
+        <button type="button" className="planner__more" aria-label={`More about ${course.id}`} onClick={onShowMore}>
+          Show more
+        </button>
+      )}
+    </div>
+  );
+}
+
+// A course whose prerequisites aren't placed yet: shown for browsing, not draggable
+interface LockedCardProps {
+  course: CourseNodeInfo;
+  needs: string[];
+  onShowMore: () => void;
+}
+
+function LockedCard({ course, needs, onShowMore }: LockedCardProps) {
+  return (
+    <div className="planner__course planner__course--expanded planner__course--locked">
+      <div className="planner__locked-body">
+        <CardBody course={course} expanded />
+        <p className="planner__needs" title={needs.join(", ")}>🔒 Needs {needs.join(", ")}</p>
+      </div>
+      <button type="button" className="planner__more" aria-label={`More about ${course.id}`} onClick={onShowMore}>
+        Show more
+      </button>
     </div>
   );
 }
@@ -88,6 +125,8 @@ export default function CoursePlanner({ major }: Props) {
   const [semesters, setSemesters] = useState<Semesters>([]);
   const [dragging, setDragging] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [filter, setFilter] = useState<PoolFilter>("unlocked");
+  const [detailsFor, setDetailsFor] = useState<string | null>(null); // course id in the popup
 
   // Mouse: drag after moving 5px, so clicks still work.
   // Touch: press and hold, so a normal swipe still scrolls the page.
@@ -119,6 +158,35 @@ export default function CoursePlanner({ major }: Props) {
 
   const placed = new Set(semesters.flat());
   const credits = (ids: string[]) => ids.reduce((sum, id) => sum + (courses.get(id)?.credits ?? 0), 0);
+  // Each course's difficulty weighted by its credits, scaled so a full load of courses
+  // at difficulty d scores d; heavier loads score higher, capped at 5
+  const semesterDifficulty = (ids: string[]) => {
+    const weighted = ids.reduce((sum, id) => {
+      const c = courses.get(id);
+      return sum + (c ? c.difficulty * c.credits : 0);
+    }, 0);
+    return Math.min(5, weighted / FULL_LOAD);
+  };
+
+  // Per level: the courses not yet placed, split by whether their prereqs are placed
+  const pool = levels.map(list => {
+    const unplaced = list.filter(n => !placed.has(n.id));
+    return {
+      unlocked: unplaced.filter(n => prereqsMet(n.id, data, placed)),
+      locked: unplaced.filter(n => !prereqsMet(n.id, data, placed)),
+    };
+  });
+  const allUnlocked = pool.flatMap(p => p.unlocked);
+  const allLocked = pool.flatMap(p => p.locked);
+
+  // Falls back to all levels if the major changed and the picked level no longer exists
+  const shown: PoolFilter = typeof filter === "number" && filter >= levels.length ? "all" : filter;
+  // Anything but the side-by-side view has the full width, so its cards are expanded
+  const expanded = shown !== "all";
+  const shownLevels = shown === "all" ? pool.map((_, level) => level) : typeof shown === "number" ? [shown] : [];
+
+  const onFilterChange = (value: string) =>
+    setFilter(value === "all" || value === "unlocked" || value === "locked" ? value : Number(value));
 
   // Every change goes through here so courses that lost a prereq fall back to the pool
   const apply = (next: Semesters) => {
@@ -165,11 +233,70 @@ export default function CoursePlanner({ major }: Props) {
           and can only go in a semester after them.
         </p>
 
-        <DropZone target="pool" accepts={accepts("pool")} dragging={dragging !== null} className="planner__pool">
-          {levels.map((list, level) => {
-            // Show what the student has unlocked and not yet placed
-            const unlocked = list.filter(n => !placed.has(n.id) && prereqsMet(n.id, data, placed));
-            const locked = list.filter(n => !placed.has(n.id)).length - unlocked.length;
+        <label className="planner__filter">
+          Show
+          <select value={String(shown)} onChange={e => onFilterChange(e.target.value)}>
+            <option value="all">All levels</option>
+            <option value="unlocked">Unlocked ({allUnlocked.length})</option>
+            <option value="locked">Locked ({allLocked.length})</option>
+            <optgroup label="One level">
+              {pool.map(({ unlocked }, level) => (
+                <option key={level} value={level}>
+                  Level {level} ({unlocked.length} unlocked)
+                </option>
+              ))}
+            </optgroup>
+          </select>
+        </label>
+
+        <DropZone
+          target="pool"
+          accepts={accepts("pool")}
+          dragging={dragging !== null}
+          className={`planner__pool${expanded ? " planner__pool--single" : ""}${shown === "unlocked" ? " planner__pool--stacked" : ""}`}
+        >
+          {/* Unlocked courses, grouped by level; levels with nothing unlocked are skipped */}
+          {shown === "unlocked" && pool.map(({ unlocked }, level) => unlocked.length > 0 && (
+            <div key={level} className="planner__level">
+              <header className="planner__level-head">
+                <strong>Level {level}</strong>
+                <span>{unlocked.length} unlocked · prerequisites placed, ready to drag into a semester</span>
+              </header>
+              <div className="planner__cards">
+                {unlocked.map(n => (
+                  <CourseCard key={n.id} course={n} onShowMore={() => setDetailsFor(n.id)} />
+                ))}
+              </div>
+            </div>
+          ))}
+          {shown === "unlocked" && allUnlocked.length === 0 && (
+            <p className="planner__muted">
+              {allLocked.length ? "Nothing unlocked right now. Place more courses to unlock others." : "All placed ✓"}
+            </p>
+          )}
+
+          {shown === "locked" && (
+            <div className="planner__level">
+              <header className="planner__level-head">
+                <strong>Locked</strong>
+                <span>Place their prerequisites in a semester to unlock these</span>
+              </header>
+              <div className="planner__cards">
+                {allLocked.map(n => (
+                  <LockedCard
+                    key={n.id}
+                    course={n}
+                    needs={missingPrereqs(n.id, data, placed)}
+                    onShowMore={() => setDetailsFor(n.id)}
+                  />
+                ))}
+              </div>
+              {allLocked.length === 0 && <p className="planner__muted">Everything is unlocked ✓</p>}
+            </div>
+          )}
+
+          {shownLevels.map(level => {
+            const { unlocked, locked } = pool[level];
 
             return (
               <div key={level} className="planner__level">
@@ -178,13 +305,23 @@ export default function CoursePlanner({ major }: Props) {
                   <span>{level === 0 ? "No prerequisites" : `Builds on level ${level - 1}`}</span>
                 </header>
 
-                {unlocked.map(n => <CourseCard key={n.id} course={n} />)}
+                <div className="planner__cards">
+                  {unlocked.map(n => (
+                    <CourseCard
+                      key={n.id}
+                      course={n}
+                      onShowMore={expanded ? () => setDetailsFor(n.id) : undefined}
+                    />
+                  ))}
+                </div>
 
-                {unlocked.length === 0 && locked > 0 && (
+                {unlocked.length === 0 && locked.length > 0 && (
                   <p className="planner__muted">Place a level {level - 1} course to unlock these.</p>
                 )}
-                {unlocked.length > 0 && locked > 0 && <p className="planner__muted">🔒 {locked} more locked</p>}
-                {unlocked.length === 0 && locked === 0 && <p className="planner__muted">All placed ✓</p>}
+                {unlocked.length > 0 && locked.length > 0 && (
+                  <p className="planner__muted">🔒 {locked.length} more locked</p>
+                )}
+                {unlocked.length === 0 && locked.length === 0 && <p className="planner__muted">All placed ✓</p>}
               </div>
             );
           })}
@@ -207,6 +344,7 @@ export default function CoursePlanner({ major }: Props) {
                 <header className="planner__semester-head">
                   <strong>Semester {index + 1}</strong>
                   <span className={total > CREDIT_LIMIT ? "planner__over" : undefined}>{total} cr</span>
+                  {ids.length > 0 && <Difficulty value={semesterDifficulty(ids)} />}
                   <button
                     type="button"
                     aria-label={`Remove semester ${index + 1}`}
@@ -245,10 +383,13 @@ export default function CoursePlanner({ major }: Props) {
       <DragOverlay dropAnimation={null}>
         {draggedCourse && (
           <div className="planner__course planner__course--overlay">
-            <CardBody course={draggedCourse} />
+            {/* Match the card it was picked up from: pool cards are expanded outside the all-levels view */}
+            <CardBody course={draggedCourse} expanded={expanded && !placed.has(draggedCourse.id)} />
           </div>
         )}
       </DragOverlay>
+
+      {detailsFor && <CourseDetails courseId={detailsFor} onClose={() => setDetailsFor(null)} />}
     </DndContext>
   );
 }
